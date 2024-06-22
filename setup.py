@@ -6,6 +6,7 @@ setup(name='llm_unlearning',
       install_requires=[
           'torch',
           'transformers',
+          'accelerate',
           'datasets',
           'hydra-core',
           'omegaconf',
