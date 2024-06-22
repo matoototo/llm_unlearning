@@ -1,0 +1,6 @@
+model:
+    path: "locuslab/tofu_ft_phi-1.5"
+    tokenizer_path: "microsoft/phi-1_5"
+dataset:
+    path: "locuslab/TOFU"
+    split: "full"
