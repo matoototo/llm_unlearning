@@ -14,4 +14,6 @@ def load_model_and_tokenizer(model_cfg: DictConfig):
         torch_dtype=torch.bfloat16,
     )
 
+    tokenizer.pad_token = tokenizer.eos_token
+
     return model, tokenizer
