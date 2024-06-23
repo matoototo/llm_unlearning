@@ -7,6 +7,9 @@ dataset:
     split: "full"
     forget_split: "forget10"
     max_length: 512
+    question_start_tag: "Question: "
+    question_end_tag: "\n"
+    answer_tag: "Answer: "
 
 unlearning:
     method: "gradient_ascent"
