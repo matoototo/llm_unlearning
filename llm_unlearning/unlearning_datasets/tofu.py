@@ -15,30 +15,22 @@ class TofuDataset(Dataset):
         self.tokenizer = tokenizer
         self.config = config
         self.max_length = config.max_length
-        self.forget_split = config.forget_split
+        self.split = config.split
 
-        self.forget_data = datasets.load_dataset("locuslab/TOFU", self.forget_split)["train"]
-        retain_split = f"retain{100 - int(self.forget_split.replace('forget', '')):02d}"
-        self.retain_data = datasets.load_dataset("locuslab/TOFU", retain_split)["train"]
+        if self.split.startswith('forget') or self.split.startswith('retain'):
+            self.data = datasets.load_dataset("locuslab/TOFU", self.split)["train"]
+        else:
+            raise ValueError(f"Invalid split: {self.split}. Must start with 'forget' or 'retain'.")
 
     def __len__(self) -> int:
-        return len(self.forget_data)
+        return len(self.data)
 
-    def __getitem__(self, idx: int) -> Dict[str, Dict[str, torch.Tensor]]:
-        forget_item = self._process_item(self.forget_data[idx])
-        retain_idx = torch.randint(0, len(self.retain_data), (1,)).item()
-        retain_item = self._process_item(self.retain_data[retain_idx])
-
-        result = {
-            "forget_inputs": forget_item,
-            "retain_inputs": retain_item
-        }
-
-        return result
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        return self._process_item(self.data[idx])
 
     def _process_item(self, item: Dict) -> Dict[str, torch.Tensor]:
-        question = item["question"]
-        answer = item["answer"]
+        question = item[self.config.question_key]
+        answer = item[self.config.answer_key]
 
         input_ids, attention_mask, labels = self._encode_qa_pair(question, answer)
 
@@ -74,11 +66,48 @@ class TofuDataset(Dataset):
         return input_ids, attention_mask, labels
 
     @staticmethod
-    def collate_fn(batch: List[Dict]) -> Dict[str, Dict[str, torch.Tensor]]:
+    def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
         return {
-            key: {
-                k: torch.stack([item[key][k] for item in batch])
-                for k in batch[0][key].keys()
-            }
-            for key in ['forget_inputs', 'retain_inputs']
+            k: torch.stack([item[k] for item in batch])
+            for k in batch[0].keys()
         }
+
+def get_tofu_dataset(
+    tokenizer: PreTrainedTokenizer,
+    config: DictConfig
+) -> Dataset:
+    forget_config = config.forget
+    retain_config = config.retain
+
+    forget_dataset = TofuDataset(tokenizer, forget_config)
+    retain_dataset = TofuDataset(tokenizer, retain_config)
+
+    class CombinedDataset(Dataset):
+        def __init__(self, forget_dataset, retain_dataset):
+            self.forget_dataset = forget_dataset
+            self.retain_dataset = retain_dataset
+
+        def __len__(self):
+            return len(self.forget_dataset)
+
+        def __getitem__(self, idx):
+            forget_item = self.forget_dataset[idx]
+            retain_idx = torch.randint(0, len(self.retain_dataset), (1,)).item()
+            retain_item = self.retain_dataset[retain_idx]
+
+            return {
+                "forget_inputs": forget_item,
+                "retain_inputs": retain_item
+            }
+
+        @staticmethod
+        def collate_fn(batch: List[Dict]) -> Dict[str, Dict[str, torch.Tensor]]:
+            return {
+                key: {
+                    k: torch.stack([item[key][k] for item in batch])
+                    for k in batch[0][key].keys()
+                }
+                for key in ['forget_inputs', 'retain_inputs']
+            }
+
+    return CombinedDataset(forget_dataset, retain_dataset)
