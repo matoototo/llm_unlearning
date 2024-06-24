@@ -1,6 +1,6 @@
 import torch
 
-from typing import Any, Tuple, List
+from typing import Any, Dict, Tuple, List
 from transformers import PreTrainedModel
 
 def check_inputs(required_inputs: List[str], **kwargs):
@@ -14,23 +14,27 @@ class UnlearningMethod:
         self.setup(**kwargs)
 
     def setup(self, **kwargs):
-        """Override this method to set up method-specific parameters"""
         pass
 
-    def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Any]:
+    def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         raise NotImplementedError("Subclasses must implement this method")
 
 class GradientAscent(UnlearningMethod):
-    def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Any]:
+    def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs"], **kwargs)
 
         forget_inputs = kwargs['forget_inputs']
         outputs = model(**forget_inputs)
         forget_loss = outputs.loss * -1
-        return forget_loss, outputs
+
+        loss_dict = {
+            "loss_forget": forget_loss.item(),
+        }
+
+        return forget_loss, loss_dict, outputs
 
 class GradientDifference(UnlearningMethod):
-    def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Any]:
+    def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs", "retain_inputs"], **kwargs)
 
         forget_inputs = kwargs['forget_inputs']
@@ -42,8 +46,14 @@ class GradientDifference(UnlearningMethod):
         retain_outputs = model(**retain_inputs)
         retain_loss = retain_outputs.loss
 
-        loss = forget_loss + retain_loss
-        return loss, (forget_outputs, retain_outputs)
+        total_loss = forget_loss + retain_loss
+
+        loss_dict = {
+            "loss_forget": forget_loss.item(),
+            "loss_retain": retain_loss.item(),
+        }
+
+        return total_loss, loss_dict, (forget_outputs, retain_outputs)
 
 def get_unlearning_method(method_name: str, **kwargs) -> UnlearningMethod:
     methods = {

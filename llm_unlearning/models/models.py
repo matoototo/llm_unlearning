@@ -11,7 +11,6 @@ def load_model_and_tokenizer(model_cfg: DictConfig):
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
-        torch_dtype=torch.bfloat16,
     )
 
     tokenizer.pad_token = tokenizer.eos_token
