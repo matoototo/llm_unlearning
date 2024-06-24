@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import Dataset
 import datasets
 from transformers import PreTrainedTokenizer
-from typing import Dict, List, Tuple
+from typing import Dict, List
 from omegaconf import DictConfig
 
 class TofuDataset(Dataset):
@@ -32,15 +32,20 @@ class TofuDataset(Dataset):
         question = item[self.config.question_key]
         answer = item[self.config.answer_key]
 
-        input_ids, attention_mask, labels = self._encode_qa_pair(question, answer)
+        result = self._encode_qa_pair(question, answer)
 
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": labels
-        }
+        if hasattr(self.config, 'perturbed_answer_key'):
+            _result_keys = list(result.keys())
+            perturbed_answers = item[self.config.perturbed_answer_key]
+            for key in _result_keys:
+                result[f"perturbed_{key}"] = [
+                    self._encode_qa_pair(question, perturbed_answer)[key]
+                    for perturbed_answer in perturbed_answers
+                ]
 
-    def _encode_qa_pair(self, question: str, answer: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return result
+
+    def _encode_qa_pair(self, question: str, answer: str) -> Dict[str, torch.Tensor]:
         question_start_token = self.config.question_start_tag
         question_end_token = self.config.question_end_tag
         answer_token = self.config.answer_tag
@@ -63,14 +68,27 @@ class TofuDataset(Dataset):
         question_end = (input_ids == self.tokenizer.convert_tokens_to_ids(question_end_token)).nonzero()[0].item()
         labels[:question_end + 1] = -100
 
-        return input_ids, attention_mask, labels
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels
+        }
 
     @staticmethod
     def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
-        return {
+        result = {
             k: torch.stack([item[k] for item in batch])
-            for k in batch[0].keys()
+            for k in batch[0].keys() if not k.startswith("perturbed_")
         }
+
+        perturbed_keys = [k for k in batch[0].keys() if k.startswith("perturbed_")]
+        for key in perturbed_keys:
+            result[key] = [
+                torch.stack([item[key][i] for item in batch])
+                for i in range(len(batch[0][key]))
+            ]
+
+        return result
 
 def get_tofu_dataset(
     tokenizer: PreTrainedTokenizer,
@@ -102,12 +120,20 @@ def get_tofu_dataset(
 
         @staticmethod
         def collate_fn(batch: List[Dict]) -> Dict[str, Dict[str, torch.Tensor]]:
-            return {
-                key: {
+            result = {}
+            for key in ['forget_inputs', 'retain_inputs']:
+                result[key] = {
                     k: torch.stack([item[key][k] for item in batch])
-                    for k in batch[0][key].keys()
+                    for k in batch[0][key].keys() if not k.startswith("perturbed_")
                 }
-                for key in ['forget_inputs', 'retain_inputs']
-            }
+
+                perturbed_keys = [k for k in batch[0][key].keys() if k.startswith("perturbed_")]
+                for p_key in perturbed_keys:
+                    result[key][p_key] = [
+                        torch.stack([item[key][p_key][i] for item in batch])
+                        for i in range(len(batch[0][key][p_key]))
+                    ]
+
+            return result
 
     return CombinedDataset(forget_dataset, retain_dataset)
