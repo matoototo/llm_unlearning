@@ -50,6 +50,14 @@ class TofuDataset(Dataset):
         question_end_token = self.config.question_end_tag
         answer_token = self.config.answer_tag
 
+        # Encode question separately to get its length
+        question_encoded = self.tokenizer(
+            f"{question_start_token}{question}{question_end_token}",
+            add_special_tokens=False,
+            return_tensors="pt"
+        )
+        question_length = question_encoded.input_ids.size(1)
+
         full_text = f"{question_start_token}{question}{question_end_token}{answer_token}{answer}"
 
         encoded = self.tokenizer(
@@ -64,9 +72,8 @@ class TofuDataset(Dataset):
         attention_mask = encoded.attention_mask.squeeze()
         labels = input_ids.clone()
 
-        # -100 -> ignore loss
-        question_end = (input_ids == self.tokenizer.convert_tokens_to_ids(question_end_token)).nonzero()[0].item()
-        labels[:question_end + 1] = -100
+        # Set labels for the question part (including question tokens) to -100
+        labels[:question_length] = -100
 
         return {
             "input_ids": input_ids,
