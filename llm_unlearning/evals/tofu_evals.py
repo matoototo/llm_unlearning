@@ -21,10 +21,14 @@ def probability(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
 
     probs = F.softmax(shift_logits, dim=-1)
 
-    correct_probs = torch.einsum('bsv,bs->bs', probs, F.one_hot(shift_labels, num_classes=probs.size(-1)))
-    sequence_probs = torch.prod(correct_probs, dim=-1)
+    valid_mask = (shift_labels != -100)
+    labels_one_hot = F.one_hot(shift_labels.clamp(min=0), num_classes=probs.size(-1))
 
-    sequence_lengths = (shift_labels != -100).sum(dim=-1).float()
+    correct_probs = torch.einsum('bsv,bsv->bs', probs, labels_one_hot.float())
+    correct_probs = correct_probs.masked_fill(~valid_mask, 1.0)
+
+    sequence_probs = torch.prod(correct_probs, dim=-1)
+    sequence_lengths = valid_mask.sum(dim=-1).float()
     length_normalized_probs = sequence_probs ** (1 / sequence_lengths)
 
     return length_normalized_probs
