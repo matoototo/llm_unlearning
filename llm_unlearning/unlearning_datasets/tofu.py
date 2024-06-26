@@ -46,19 +46,19 @@ class TofuDataset(Dataset):
         return result
 
     def _encode_qa_pair(self, question: str, answer: str) -> Dict[str, torch.Tensor]:
-        question_start_token = self.config.question_start_tag
-        question_end_token = self.config.question_end_tag
-        answer_token = self.config.answer_tag
+        question_start_tag = self.config.question_start_tag
+        question_end_tag = self.config.question_end_tag
+        answer_tag = self.config.answer_tag
 
         # Encode question separately to get its length
         question_encoded = self.tokenizer(
-            f"{question_start_token}{question}{question_end_token}",
+            f"{question_start_tag}{question}{question_end_tag}{answer_tag}",
             add_special_tokens=False,
             return_tensors="pt"
         )
         question_length = question_encoded.input_ids.size(1)
 
-        full_text = f"{question_start_token}{question}{question_end_token}{answer_token}{answer}"
+        full_text = f"{question_start_tag}{question}{question_end_tag}{answer_tag}{answer}"
 
         encoded = self.tokenizer(
             full_text,
@@ -84,7 +84,8 @@ class TofuDataset(Dataset):
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "labels": labels
+            "labels": labels,
+            "question_length": torch.tensor(question_length)
         }
 
     @staticmethod

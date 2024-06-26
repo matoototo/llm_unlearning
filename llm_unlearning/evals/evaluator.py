@@ -1,4 +1,6 @@
 import torch
+import einops
+
 from tqdm import tqdm
 from typing import Dict, Any, Callable
 from torch.utils.data import DataLoader
@@ -50,7 +52,8 @@ class Evaluator:
 
     def compute_truth_ratio(self, dataset: TofuDataset) -> Dict[str, float]:
         def truth_ratio_fn(batch):
-            gt_outputs = self.model(**{k: v for k, v in batch.items() if not k.startswith("perturbed_")})
+            input_keys = ["input_ids", "attention_mask", "labels"]
+            gt_outputs = self.model(**{k: v for k, v in batch.items() if k in input_keys})
             gt_logits = gt_outputs.logits
             gt_labels = batch["labels"]
 
@@ -74,30 +77,54 @@ class Evaluator:
 
     def compute_probability(self, dataset: TofuDataset) -> Dict[str, float]:
         def probability_fn(batch):
-            outputs = self.model(**{k: v for k, v in batch.items() if not k.startswith("perturbed_")})
+            input_keys = ["input_ids", "attention_mask", "labels"]
+            outputs = self.model(**{k: v for k, v in batch.items() if k in input_keys})
             return probability(outputs.logits, batch["labels"])
 
         return self._compute_metric(dataset, probability_fn, "Probability")
 
     def compute_rouge(self, dataset: TofuDataset) -> Dict[str, float]:
         dataloader = self._get_dataloader(dataset)
+        pad_token_id = self.tokenizer.pad_token_id
         predictions = []
         references = []
+
+        def extract_question_tokens(batch):
+            question_length = batch["question_length"]  # (batch_size,)
+            input_ids = batch["input_ids"]  # (batch_size, seq_len)
+            attention_mask = batch["attention_mask"]  # (batch_size, seq_len)
+            batch_size, seq_len = input_ids.shape
+
+            # Extract question tokens (right-padded)
+            mask = einops.repeat(torch.arange(seq_len, device=question_length.device), 's -> b s', b=batch_size) < question_length[:, None]
+            max_question_length = question_length.max().item()
+            extracted_input_ids = torch.where(mask[:, :max_question_length], input_ids[:, :max_question_length], pad_token_id)
+            extracted_attention_mask = torch.where(mask[:, :max_question_length], attention_mask[:, :max_question_length], 0)
+
+            # Rotate to convert right-padded to left-padded
+            rotation_amounts = max_question_length - question_length
+            rotated_input_ids = torch.stack([torch.roll(seq, shift.item()) for seq, shift in zip(extracted_input_ids, rotation_amounts)])
+            rotated_attention_mask = torch.stack([torch.roll(seq, shift.item()) for seq, shift in zip(extracted_attention_mask, rotation_amounts)])
+
+            return rotated_input_ids, rotated_attention_mask
 
         with torch.no_grad():
             for batch in tqdm(dataloader, desc="Computing ROUGE"):
                 batch = self._process_batch(batch)
+                input_ids, attention_mask = extract_question_tokens(batch)
+                labels = batch["input_ids"]
 
                 outputs = self.model.generate(
-                    input_ids=batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
                     max_length=self.config.max_length,
-                    num_return_sequences=1,
-                    no_repeat_ngram_size=2
+                    pad_token_id=pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    use_cache=True,
                 )
 
                 decoded_outputs = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
-                decoded_labels = self.tokenizer.batch_decode(batch["labels"], skip_special_tokens=True)
+                decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
 
                 predictions.extend(decoded_outputs)
                 references.extend(decoded_labels)
