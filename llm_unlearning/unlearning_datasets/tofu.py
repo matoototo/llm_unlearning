@@ -75,6 +75,12 @@ class TofuDataset(Dataset):
         # Set labels for the question part (including question tokens) to -100
         labels[:question_length] = -100
 
+        # Set padding tokens to -100 in labels
+        padding_mask = (attention_mask == 0).long()
+        # First non-zero padding mask element is eos token, don't mask it
+        padding_mask[padding_mask.argmax()] = False
+        labels = labels.masked_fill(padding_mask.bool(), -100)
+
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
