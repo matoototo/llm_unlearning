@@ -19,17 +19,16 @@ def probability(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     shift_logits = logits[..., :-1, :].contiguous()
     shift_labels = labels[..., 1:].contiguous()
 
-    probs = F.softmax(shift_logits, dim=-1)
+    loss = F.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1), reduction='none', ignore_index=-100)
+    loss = einops.rearrange(loss, '(b s) -> b s', b=shift_labels.size(0))
 
     valid_mask = (shift_labels != -100)
-    labels_one_hot = F.one_hot(shift_labels.clamp(min=0), num_classes=probs.size(-1))
 
-    correct_probs = torch.einsum('bsv,bsv->bs', probs, labels_one_hot.float())
-    correct_probs = correct_probs.masked_fill(~valid_mask, 1.0)
-
-    sequence_probs = torch.prod(correct_probs, dim=-1)
     sequence_lengths = valid_mask.sum(dim=-1).float()
-    length_normalized_probs = sequence_probs ** (1 / sequence_lengths)
+    sequence_losses = loss.sum(dim=-1)
+    length_normalized_losses = sequence_losses / sequence_lengths
+
+    length_normalized_probs = torch.exp(-length_normalized_losses)
 
     return length_normalized_probs
 
