@@ -24,7 +24,14 @@ class Evaluator:
         )
 
     def _process_batch(self, batch: Dict[str, Any]) -> Dict[str, Any]:
-        return {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+        def move_to_device(item):
+            if isinstance(item, torch.Tensor):
+                return item.to(self.device)
+            elif isinstance(item, list) and all(isinstance(x, torch.Tensor) for x in item):
+                return [x.to(self.device) for x in item]
+            return item
+
+        return {k: move_to_device(v) for k, v in batch.items()}
 
     def _compute_metric(self, dataset: TofuDataset, metric_fn: Callable, desc: str) -> Dict[str, float]:
         dataloader = self._get_dataloader(dataset)
