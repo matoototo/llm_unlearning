@@ -1,0 +1,23 @@
+model:
+  path: "/path/to/checkpoint-123"
+  tokenizer_path: "/path/to/checkpoint-123"
+  fp16: true
+
+dataset:
+  name: "tofu"
+  max_length: 512
+  path: "locuslab/TOFU"
+  split: "forget10_perturbed"
+  question_start_tag: "Question: "
+  question_end_tag: "\n"
+  answer_tag: "Answer: "
+  question_key: "question"
+  answer_key: "paraphrased_answer"
+  perturbed_answer_key: "perturbed_answer"
+
+metrics:
+  - truth_ratio
+  - probability
+
+batch_size: 4
+max_length: 512
