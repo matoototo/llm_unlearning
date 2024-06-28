@@ -17,10 +17,10 @@ class TofuDataset(Dataset):
         self.max_length = config.max_length
         self.split = config.split
 
-        if self.split.startswith('forget') or self.split.startswith('retain'):
-            self.data = datasets.load_dataset("locuslab/TOFU", self.split)["train"]
-        else:
+        if not(self.split.startswith('forget') or self.split.startswith('retain')):
             raise ValueError(f"Invalid split: {self.split}. Must start with 'forget' or 'retain'.")
+
+        self.data = datasets.load_dataset("locuslab/TOFU", self.split)["train"]
 
     def __len__(self) -> int:
         return len(self.data)

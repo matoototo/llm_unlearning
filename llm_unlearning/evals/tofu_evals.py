@@ -3,7 +3,8 @@ import torch
 import torch.nn.functional as F
 import evaluate
 import einops
-from typing import List
+from typing import List, Dict, Any
+from abc import ABC, abstractmethod
 
 def probability(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     """
@@ -63,6 +64,91 @@ def truth_ratio(
 
     return R_truth
 
-def rouge(predictions: List[str], references: List[str]) -> dict:
+def rouge_l(predictions: List[str], references: List[str]) -> List[float]:
     rouge = evaluate.load('rouge')
-    return rouge.compute(predictions=predictions, references=references)
+    results = rouge.compute(predictions=predictions, references=references, use_stemmer=True)
+    return results['rougeL']
+
+class Evaluation(ABC):
+    @abstractmethod
+    def compute(self, model, batch: Dict[str, Any], tokenizer=None) -> torch.Tensor:
+        pass
+
+class TruthRatio(Evaluation):
+    def compute(self, model, batch: Dict[str, Any], tokenizer=None) -> torch.Tensor:
+        input_keys = ["input_ids", "attention_mask", "labels"]
+        gt_outputs = model(**{k: v for k, v in batch.items() if k in input_keys})
+        gt_logits = gt_outputs.logits
+        gt_labels = batch["labels"]
+
+        perturbed_logits = []
+        perturbed_labels = []
+
+        for i in range(len(batch["perturbed_input_ids"])):
+            perturbed_output = model(
+                input_ids=batch["perturbed_input_ids"][i],
+                attention_mask=batch["perturbed_attention_mask"][i]
+            )
+            perturbed_logits.append(perturbed_output.logits)
+            perturbed_labels.append(batch["perturbed_labels"][i])
+
+        perturbed_logits = torch.stack(perturbed_logits, dim=1)
+        perturbed_labels = torch.stack(perturbed_labels, dim=1)
+
+        return truth_ratio(gt_logits, gt_labels, perturbed_logits, perturbed_labels)
+
+class Probability(Evaluation):
+    def compute(self, model, batch: Dict[str, Any], tokenizer=None) -> torch.Tensor:
+        input_keys = ["input_ids", "attention_mask", "labels"]
+        outputs = model(**{k: v for k, v in batch.items() if k in input_keys})
+        return probability(outputs.logits, batch["labels"])
+
+class RougeL(Evaluation):
+    def __init__(self, max_length: int):
+        self.max_length = max_length
+
+    def compute(self, model, batch: Dict[str, Any], tokenizer) -> torch.Tensor:
+        pad_token_id = tokenizer.pad_token_id
+
+        def extract_question_tokens(batch):
+            question_length = batch["question_length"]  # (batch_size,)
+            input_ids = batch["input_ids"]  # (batch_size, seq_len)
+            attention_mask = batch["attention_mask"]  # (batch_size, seq_len)
+            batch_size, seq_len = input_ids.shape
+
+            # Extract question tokens (right-padded)
+            mask = einops.repeat(torch.arange(seq_len, device=question_length.device), 's -> b s', b=batch_size) < question_length[:, None]
+            max_question_length = question_length.max().item()
+            extracted_input_ids = torch.where(mask[:, :max_question_length], input_ids[:, :max_question_length], pad_token_id)
+            extracted_attention_mask = torch.where(mask[:, :max_question_length], attention_mask[:, :max_question_length], 0)
+
+            # Rotate to convert right-padded to left-padded
+            rotation_amounts = max_question_length - question_length
+            rotated_input_ids = torch.stack([torch.roll(seq, shift.item()) for seq, shift in zip(extracted_input_ids, rotation_amounts)])
+            rotated_attention_mask = torch.stack([torch.roll(seq, shift.item()) for seq, shift in zip(extracted_attention_mask, rotation_amounts)])
+
+            return rotated_input_ids, rotated_attention_mask
+
+        input_ids, attention_mask = extract_question_tokens(batch)
+        labels = batch["input_ids"]
+
+        outputs = model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_length=self.max_length,
+            pad_token_id=pad_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+            use_cache=True,
+        )
+
+        decoded_outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+
+        rouge_l_scores = rouge_l(decoded_outputs, decoded_labels)
+        return torch.tensor(rouge_l_scores, device=model.device)
+
+all_strategies = {
+    "truth_ratio": TruthRatio(),
+    "probability": Probability(),
+    "rouge_l": RougeL()
+}
