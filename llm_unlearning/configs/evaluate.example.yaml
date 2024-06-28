@@ -10,16 +10,16 @@ tofu_base: &tofu_base
   perturb_probability: false
 
 model:
-  path: "/path/to/checkpoint-123"
+  path: "/path/to/checkpoint-123" # Alternatively, path to directory with checkpoint directories
   tokenizer_path: "/path/to/checkpoint-123"
   fp16: true
 
 datasets:
-  tofu_forget10:
+  tofu_retain:
     <<: *tofu_base
-    name: "tofu_forget10"
+    name: "tofu_retain"
     answer_key: "paraphrased_answer"
-    split: "forget10_perturbed"
+    split: "retain_perturbed"
 
   real_authors:
     <<: *tofu_base
@@ -33,10 +33,17 @@ datasets:
     split: "world_facts_perturbed"
     perturb_probability: true
 
+  # tofu_forget:
+  #   <<: *tofu_base
+  #   name: "tofu_forget"
+  #   split: "forget10_perturbed"
+
 metrics:
   - truth_ratio
   - probability
   - rouge_l
 
-batch_size: 16
+batch_size: 8
 max_length: 512
+
+save_results_path: "/path/to/results.json"
