@@ -147,8 +147,8 @@ class RougeL(Evaluation):
         rouge_l_scores = rouge_l(decoded_outputs, decoded_labels)
         return torch.tensor(rouge_l_scores, device=model.device)
 
-all_strategies = {
-    "truth_ratio": TruthRatio(),
-    "probability": Probability(),
-    "rouge_l": RougeL()
+all_metrics = {
+    "truth_ratio": lambda config: TruthRatio(),
+    "probability": lambda config: Probability(),
+    "rouge_l": lambda config: RougeL(config.max_length)
 }

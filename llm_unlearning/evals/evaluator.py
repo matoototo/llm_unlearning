@@ -19,7 +19,7 @@ class Evaluator:
             if metric not in all_metrics:
                 print(f"Warning: Metric '{metric}' not recognized and will be skipped.")
                 continue
-            self.metrics[metric] = all_metrics[metric]
+            self.metrics[metric] = all_metrics[metric](self.config)
 
     def _get_dataloader(self, dataset: TofuDataset) -> DataLoader:
         return DataLoader(
