@@ -16,10 +16,6 @@ class TofuDataset(Dataset):
         self.config = config
         self.max_length = config.max_length
         self.split = config.split
-
-        if not(self.split.startswith('forget') or self.split.startswith('retain')):
-            raise ValueError(f"Invalid split: {self.split}. Must start with 'forget' or 'retain'.")
-
         self.data = datasets.load_dataset("locuslab/TOFU", self.split)["train"]
 
     def __len__(self) -> int:
@@ -73,7 +69,7 @@ class TofuDataset(Dataset):
         labels = input_ids.clone()
 
         # Set labels for the question part (including question tokens) to -100
-        labels[:question_length] = -100
+        labels[:question_length-1] = -100
 
         # Set padding tokens to -100 in labels
         padding_mask = (attention_mask == 0).long()

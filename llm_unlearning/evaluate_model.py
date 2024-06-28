@@ -10,11 +10,16 @@ def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
 
     model, tokenizer = load_model_and_tokenizer(cfg.model)
-    dataset = TofuDataset(tokenizer=tokenizer, config=cfg.dataset)
-
     evaluator = Evaluator(model=model, tokenizer=tokenizer, config=cfg)
 
-    print(evaluator.evaluate(dataset=dataset))
+    # Iterate over all datasets except the base configuration
+    for dataset_name, dataset_config in cfg.datasets.items():
+        dataset = TofuDataset(tokenizer=tokenizer, config=dataset_config)
+
+        print(f"Evaluating dataset: {dataset_config.name}")
+        results = evaluator.evaluate(dataset=dataset)
+        print(results)
+        print("\n")
 
 if __name__ == "__main__":
     main()

@@ -41,13 +41,14 @@ class Evaluator:
 
     def _compute_metric(self, dataset: TofuDataset, eval: Evaluation, desc: str) -> Dict[str, float]:
         dataloader = self._get_dataloader(dataset)
+        perturb_probability = dataset.config.perturb_probability
         total_metric = 0.0
         total_samples = 0
 
         with torch.no_grad():
             for batch in tqdm(dataloader, desc=desc):
                 batch = self._process_batch(batch)
-                batch_metric = eval.compute(self.model, batch, self.tokenizer)
+                batch_metric = eval.compute(self.model, batch, self.tokenizer, perturb_probability=perturb_probability)
                 total_metric += batch_metric.sum().item()
                 total_samples += batch_metric.size(0)
 

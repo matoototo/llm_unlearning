@@ -71,11 +71,11 @@ def rouge_l(predictions: List[str], references: List[str]) -> List[float]:
 
 class Evaluation(ABC):
     @abstractmethod
-    def compute(self, model, batch: Dict[str, Any], tokenizer=None) -> torch.Tensor:
+    def compute(self, model, batch: Dict[str, Any], tokenizer=None, **kwargs) -> torch.Tensor:
         pass
 
 class TruthRatio(Evaluation):
-    def compute(self, model, batch: Dict[str, Any], tokenizer=None) -> torch.Tensor:
+    def compute(self, model, batch: Dict[str, Any], tokenizer=None, **kwargs) -> torch.Tensor:
         input_keys = ["input_ids", "attention_mask", "labels"]
         gt_outputs = model(**{k: v for k, v in batch.items() if k in input_keys})
         gt_logits = gt_outputs.logits
@@ -98,16 +98,31 @@ class TruthRatio(Evaluation):
         return truth_ratio(gt_logits, gt_labels, perturbed_logits, perturbed_labels)
 
 class Probability(Evaluation):
-    def compute(self, model, batch: Dict[str, Any], tokenizer=None) -> torch.Tensor:
+    def compute(self, model, batch: Dict[str, Any], tokenizer=None, **kwargs) -> torch.Tensor:
+        perturb_probability = kwargs.get("perturb_probability", False)
         input_keys = ["input_ids", "attention_mask", "labels"]
         outputs = model(**{k: v for k, v in batch.items() if k in input_keys})
-        return probability(outputs.logits, batch["labels"])
+
+        answer_probability = probability(outputs.logits, batch["labels"])
+        if not perturb_probability: return answer_probability
+
+        # World Facts and Real Authors look at the probability ratio between the answer and the multiple-choice examples
+        perturbed_probabilities = []
+        for i in range(len(batch["perturbed_input_ids"])):
+            perturbed_output = model(
+                input_ids=batch["perturbed_input_ids"][i],
+                attention_mask=batch["perturbed_attention_mask"][i]
+            )
+            perturbed_probabilities.append(probability(perturbed_output.logits, batch["perturbed_labels"][i]))
+
+        full_probability = torch.stack([answer_probability] + perturbed_probabilities, dim=0).sum(dim=0)
+        return answer_probability / full_probability
 
 class RougeL(Evaluation):
     def __init__(self, max_length: int):
         self.max_length = max_length
 
-    def compute(self, model, batch: Dict[str, Any], tokenizer) -> torch.Tensor:
+    def compute(self, model, batch: Dict[str, Any], tokenizer=None, **kwargs) -> torch.Tensor:
         pad_token_id = tokenizer.pad_token_id
 
         def extract_question_tokens(batch):
@@ -144,8 +159,9 @@ class RougeL(Evaluation):
         decoded_outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
         decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
-        rouge_l_scores = rouge_l(decoded_outputs, decoded_labels)
-        return torch.tensor(rouge_l_scores, device=model.device)
+        # Returns average but that's fine, we average later anyway
+        rouge_l_score = rouge_l(decoded_outputs, decoded_labels)
+        return torch.tensor(rouge_l_score, device=model.device).unsqueeze(0)
 
 all_metrics = {
     "truth_ratio": lambda config: TruthRatio(),

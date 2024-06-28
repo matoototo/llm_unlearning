@@ -1,23 +1,42 @@
+tofu_base: &tofu_base
+  path: "locuslab/TOFU"
+  max_length: 512
+  question_start_tag: "Question: "
+  question_end_tag: "\n"
+  answer_tag: "Answer: "
+  question_key: "question"
+  answer_key: "answer"
+  perturbed_answer_key: "perturbed_answer"
+  perturb_probability: false
+
 model:
   path: "/path/to/checkpoint-123"
   tokenizer_path: "/path/to/checkpoint-123"
   fp16: true
 
-dataset:
-  name: "tofu"
-  max_length: 512
-  path: "locuslab/TOFU"
-  split: "forget10_perturbed"
-  question_start_tag: "Question: "
-  question_end_tag: "\n"
-  answer_tag: "Answer: "
-  question_key: "question"
-  answer_key: "paraphrased_answer"
-  perturbed_answer_key: "perturbed_answer"
+datasets:
+  tofu_forget10:
+    <<: *tofu_base
+    name: "tofu_forget10"
+    answer_key: "paraphrased_answer"
+    split: "forget10_perturbed"
+
+  real_authors:
+    <<: *tofu_base
+    name: "real_authors"
+    split: "real_authors_perturbed"
+    perturb_probability: true
+
+  world_facts:
+    <<: *tofu_base
+    name: "world_facts"
+    split: "world_facts_perturbed"
+    perturb_probability: true
 
 metrics:
   - truth_ratio
   - probability
+  - rouge_l
 
-batch_size: 4
+batch_size: 16
 max_length: 512
