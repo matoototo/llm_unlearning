@@ -12,6 +12,7 @@ def check_inputs(required_inputs: List[str], **kwargs):
 class UnlearningMethod:
     def __init__(self, **kwargs):
         self.setup(**kwargs)
+        self.input_keys = ["input_ids", "attention_mask", "labels"]
 
     def setup(self, **kwargs):
         pass
@@ -23,7 +24,7 @@ class GradientAscent(UnlearningMethod):
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs"], **kwargs)
 
-        forget_inputs = kwargs['forget_inputs']
+        forget_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
         outputs = model(**forget_inputs)
         forget_loss = outputs.loss * -1
 
@@ -37,8 +38,8 @@ class GradientDifference(UnlearningMethod):
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs", "retain_inputs"], **kwargs)
 
-        forget_inputs = kwargs['forget_inputs']
-        retain_inputs = kwargs['retain_inputs']
+        forget_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
+        retain_inputs = {k: v for k, v in kwargs['retain_inputs'].items() if k in self.input_keys}
 
         forget_outputs = model(**forget_inputs)
         forget_loss = forget_outputs.loss * -1
