@@ -13,5 +13,6 @@ setup(name='llm_unlearning',
           'hydra-core',
           'omegaconf',
           'wandb',
+          'matplotlib',
       ],
 )
