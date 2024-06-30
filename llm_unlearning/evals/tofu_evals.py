@@ -147,8 +147,22 @@ class Rouge(Evaluation):
 
             return rotated_input_ids, rotated_attention_mask
 
+        def extract_answer_tokens(tokens, question_length, pad_token_id):
+            batch_size, seq_len = tokens.shape
+            mask = tokens != pad_token_id
+
+            max_answer_length = seq_len - question_length.min().item()
+            extracted_answers = torch.full((batch_size, max_answer_length), pad_token_id, device=tokens.device)
+
+            for i in range(batch_size):
+                answer = tokens[i, mask[i]][question_length[i]:]
+                extracted_answers[i, :len(answer)] = answer
+
+            return extracted_answers
+
         input_ids, attention_mask = extract_question_tokens(batch)
         labels = batch["input_ids"]
+        question_length = batch["question_length"]
 
         outputs = model.generate(
             input_ids=input_ids,
@@ -159,8 +173,11 @@ class Rouge(Evaluation):
             use_cache=True,
         )
 
-        decoded_outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+        extracted_outputs = extract_answer_tokens(outputs, question_length, pad_token_id)
+        extracted_labels = extract_answer_tokens(labels, question_length, pad_token_id)
+
+        decoded_outputs = tokenizer.batch_decode(extracted_outputs, skip_special_tokens=True)
+        decoded_labels = tokenizer.batch_decode(extracted_labels, skip_special_tokens=True)
 
         # Returns average but that's fine, we average later anyway
         rouge_score_value = rouge_score(decoded_outputs, decoded_labels, self.rouge_type)

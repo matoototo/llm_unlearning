@@ -14,7 +14,7 @@ def get_checkpoint_paths(cfg: DictConfig) -> List[str]:
     paths = []
 
     # Add base model as checkpoint-0 if base_path is provided
-    if cfg.model.base_path: paths.append("checkpoint-0")
+    if cfg.model.get("base_path"): paths.append("checkpoint-0")
 
     if not os.path.isdir(cfg.model.path):
         if re.match(r'checkpoint-\d+$', os.path.basename(cfg.model.path)):
