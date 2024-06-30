@@ -1,18 +1,18 @@
 from transformers import Trainer
-from llm_unlearning.methods import get_unlearning_method
+from llm_unlearning.methods import get_method
 from typing import Dict
 
 class UnlearningTrainer(Trainer):
     def __init__(self, *args, **kwargs):
-        unlearning_method = kwargs.pop("unlearning_method")
+        method = kwargs.pop("method")
         unlearning_kwargs = kwargs.pop("unlearning_kwargs", {})
         super().__init__(*args, **kwargs)
-        self.unlearning_method = get_unlearning_method(unlearning_method, **unlearning_kwargs)
+        self.method = get_method(method, **unlearning_kwargs)
         self.loss_components: Dict[str, float] = {}
         self.loss_component_counts: Dict[str, int] = {}
 
     def compute_loss(self, model, inputs, return_outputs=False):
-        loss, loss_dict, outputs = self.unlearning_method.compute_loss(model, **inputs)
+        loss, loss_dict, outputs = self.method.compute_loss(model, **inputs)
 
         for loss_name, loss_value in loss_dict.items():
             self.accumulate_loss(loss_name, loss_value)

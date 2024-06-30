@@ -105,10 +105,10 @@ def get_tofu_dataset(
     config: DictConfig
 ) -> Dataset:
     forget_config = config.forget
-    retain_config = config.retain
+    retain_config = config.get("retain", None)
 
     forget_dataset = TofuDataset(tokenizer, forget_config)
-    retain_dataset = TofuDataset(tokenizer, retain_config)
+    retain_dataset = TofuDataset(tokenizer, retain_config) if retain_config is not None else None
 
     class CombinedDataset(Dataset):
         def __init__(self, forget_dataset, retain_dataset):
@@ -120,6 +120,8 @@ def get_tofu_dataset(
 
         def __getitem__(self, idx):
             forget_item = self.forget_dataset[idx]
+            if self.retain_dataset is None: return { "forget_inputs": forget_item }
+
             retain_idx = torch.randint(0, len(self.retain_dataset), (1,)).item()
             retain_item = self.retain_dataset[retain_idx]
 
@@ -132,6 +134,8 @@ def get_tofu_dataset(
         def collate_fn(batch: List[Dict]) -> Dict[str, Dict[str, torch.Tensor]]:
             result = {}
             for key in ['forget_inputs', 'retain_inputs']:
+                if key not in batch[0]: continue
+
                 result[key] = {
                     k: torch.stack([item[key][k] for item in batch])
                     for k in batch[0][key].keys() if not k.startswith("perturbed_")

@@ -20,7 +20,7 @@ def main(cfg: DictConfig) -> None:
         train_dataset=dataset,
         tokenizer=tokenizer,
         data_collator=collate_fn,
-        unlearning_method=cfg.unlearning.method,
+        method=cfg.unlearning.method,
     )
 
     trainer.train()

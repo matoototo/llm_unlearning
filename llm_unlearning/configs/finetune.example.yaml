@@ -1,0 +1,36 @@
+base_dataset: &base_dataset
+    path: "locuslab/TOFU"
+    max_length: 512
+    question_start_tag: "Question: "
+    question_end_tag: "\n"
+    answer_tag: "Answer: "
+    question_key: "question"
+    answer_key: "answer"
+
+model:
+    path: "microsoft/phi-1_5"
+    tokenizer_path: "microsoft/phi-1_5"
+
+dataset:
+    name: "tofu"
+    forget:
+        <<: *base_dataset
+        split: "retain90"
+
+unlearning:
+    method: "gradient_descent"
+
+training_arguments:
+    output_dir: ./results
+    num_train_epochs: 5
+    warmup_steps: 3600 # 1 epoch for retain90
+    per_device_train_batch_size: 1
+    per_device_eval_batch_size: 1
+    weight_decay: 0.01
+    logging_dir: ./logs
+    logging_steps: 10
+    save_steps: 0.1
+    fp16: true
+    learning_rate: 1e-5
+    remove_unused_columns: false
+    save_only_model: true
