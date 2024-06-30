@@ -3,8 +3,9 @@ import torch
 import torch.nn.functional as F
 import evaluate
 import einops
-from typing import List, Dict, Any
+
 from abc import ABC, abstractmethod
+from typing import List, Dict, Any, Literal
 
 def probability(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     """
@@ -64,10 +65,11 @@ def truth_ratio(
 
     return R_truth
 
-def rouge_l(predictions: List[str], references: List[str]) -> List[float]:
+RougeType = Literal['rouge1', 'rouge2', 'rougeL', 'rougeLsum']
+def rouge_score(predictions: List[str], references: List[str], rouge_type: RougeType = 'rougeL') -> List[float]:
     rouge = evaluate.load('rouge')
     results = rouge.compute(predictions=predictions, references=references, use_stemmer=True)
-    return results['rougeL']
+    return results[rouge_type]
 
 class Evaluation(ABC):
     @abstractmethod
@@ -118,9 +120,10 @@ class Probability(Evaluation):
         full_probability = torch.stack([answer_probability] + perturbed_probabilities, dim=0).sum(dim=0)
         return answer_probability / full_probability
 
-class RougeL(Evaluation):
-    def __init__(self, max_length: int):
+class Rouge(Evaluation):
+    def __init__(self, max_length: int, rouge_type: RougeType = 'rougeL'):
         self.max_length = max_length
+        self.rouge_type = rouge_type
 
     def compute(self, model, batch: Dict[str, Any], tokenizer=None, **kwargs) -> torch.Tensor:
         pad_token_id = tokenizer.pad_token_id
@@ -160,11 +163,15 @@ class RougeL(Evaluation):
         decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
         # Returns average but that's fine, we average later anyway
-        rouge_l_score = rouge_l(decoded_outputs, decoded_labels)
-        return torch.tensor(rouge_l_score, device=model.device).unsqueeze(0)
+        rouge_score_value = rouge_score(decoded_outputs, decoded_labels, self.rouge_type)
+        return torch.tensor(rouge_score_value, device=model.device).unsqueeze(0)
 
 all_metrics = {
     "truth_ratio": lambda config: TruthRatio(),
     "probability": lambda config: Probability(),
-    "rouge_l": lambda config: RougeL(config.max_length)
+
+    "rouge_1": lambda config: Rouge(max_length=config.max_length, rouge_type='rouge1'),
+    "rouge_2": lambda config: Rouge(max_length=config.max_length, rouge_type='rouge2'),
+    "rouge_l": lambda config: Rouge(max_length=config.max_length, rouge_type='rougeL'),
+    "rouge_lsum": lambda config: Rouge(max_length=config.max_length, rouge_type='rougeLsum'),
 }

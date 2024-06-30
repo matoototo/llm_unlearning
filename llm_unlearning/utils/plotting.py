@@ -10,7 +10,7 @@ def harmonic_mean(arr):
 def gather_metrics(data):
     checkpoints = list(data.keys())
     datasets = list(data[checkpoints[0]].keys())
-    metrics = ["rouge_l", "probability"]
+    metrics = list(data[checkpoints[0]][datasets[0]].keys())
 
     gathered_data = {
         "checkpoints": checkpoints,
