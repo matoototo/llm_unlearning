@@ -48,8 +48,8 @@ class TofuDataset(Dataset):
 
         # Encode question separately to get its length
         question_encoded = self.tokenizer(
-            f"{question_start_tag}{question}{question_end_tag}{answer_tag}",
-            add_special_tokens=False,
+            f"{question_start_tag}{question}{question_end_tag}",
+            add_special_tokens=True,
             return_tensors="pt"
         )
         question_length = question_encoded.input_ids.size(1)
@@ -59,6 +59,7 @@ class TofuDataset(Dataset):
         encoded = self.tokenizer(
             full_text,
             max_length=self.max_length,
+            add_special_tokens=True,
             padding="max_length",
             truncation=True,
             return_tensors="pt"
@@ -69,7 +70,7 @@ class TofuDataset(Dataset):
         labels = input_ids.clone()
 
         # Set labels for the question part (including question tokens) to -100
-        labels[:question_length-1] = -100
+        labels[:question_length] = -100
 
         # Set padding tokens to -100 in labels
         padding_mask = (attention_mask == 0).long()
