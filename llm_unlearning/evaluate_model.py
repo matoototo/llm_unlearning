@@ -3,54 +3,65 @@ import re
 import json
 import hydra
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from omegaconf import DictConfig, OmegaConf
 
 from llm_unlearning.evals import Evaluator
 from llm_unlearning.models import load_model_and_tokenizer
 from llm_unlearning.unlearning_datasets import TofuDataset
 
-def get_checkpoint_paths(path: str) -> List[str]:
-    if not os.path.isdir(path):
-        raise ValueError(f"The path {path} is not a directory")
+def get_checkpoint_paths(cfg: DictConfig) -> List[str]:
+    paths = []
 
-    if re.match(r'checkpoint-\d+$', os.path.basename(path)):
-        return [path]
+    # Add base model as checkpoint-0 if base_path is provided
+    if cfg.model.base_path: paths.append("checkpoint-0")
 
-    checkpoint_dirs = [
-        os.path.join(path, d) for d in os.listdir(path)
-        if os.path.isdir(os.path.join(path, d)) and re.match(r'checkpoint-\d+$', d)
-    ]
+    if not os.path.isdir(cfg.model.path):
+        if re.match(r'checkpoint-\d+$', os.path.basename(cfg.model.path)):
+            paths.append(cfg.model.path)
+        else:
+            raise ValueError(f"The path {cfg.model.path} is not a valid checkpoint directory")
+    else:
+        checkpoint_dirs = [
+            os.path.join(cfg.model.path, d) for d in os.listdir(cfg.model.path)
+            if os.path.isdir(os.path.join(cfg.model.path, d)) and re.match(r'checkpoint-\d+$', d)
+        ]
 
-    if not checkpoint_dirs:
-        raise ValueError(f"No checkpoint directories found in {path}")
+        if not checkpoint_dirs:
+            raise ValueError(f"No checkpoint directories found in {cfg.model.path}")
 
-    # Sort checkpoint directories by creation time
-    checkpoint_dirs.sort(key=lambda x: os.path.getctime(x))
+        # Sort checkpoint directories by number
+        checkpoint_dirs.sort(key=lambda x: int(re.findall(r'\d+', os.path.basename(x))[0]))
+        paths.extend(checkpoint_dirs)
 
-    return checkpoint_dirs
+    return paths
+
+def load_model_for_evaluation(cfg: DictConfig, checkpoint_path: str) -> Tuple[Any, Any]:
+    if checkpoint_path == "checkpoint-0":
+        cfg.model.path = cfg.model.base_path
+        cfg.model.tokenizer_path = cfg.model.base_tokenizer_path
+    else:
+        cfg.model.path = checkpoint_path
+        cfg.model.tokenizer_path = checkpoint_path
+
+    return load_model_and_tokenizer(cfg.model)
 
 @hydra.main(config_path="configs", config_name="evaluate", version_base=None)
 def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
 
-    checkpoint_paths = get_checkpoint_paths(cfg.model.path)
+    checkpoint_paths = get_checkpoint_paths(cfg)
     all_results: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
     for checkpoint_path in checkpoint_paths:
-        print(f"\nEvaluating checkpoint: {checkpoint_path}")
-
         checkpoint_name = os.path.basename(checkpoint_path)
+        print(f"\nEvaluating {checkpoint_name}")
+
         all_results[checkpoint_name] = {}
 
-        # Update the model path in the config
-        cfg.model.path = checkpoint_path
-        cfg.model.tokenizer_path = checkpoint_path
-
-        model, tokenizer = load_model_and_tokenizer(cfg.model)
+        model, tokenizer = load_model_for_evaluation(cfg, checkpoint_path)
         evaluator = Evaluator(model=model, tokenizer=tokenizer, config=cfg)
 
-        # Iterate over all datasets except the base configuration
         for dataset_name, dataset_config in cfg.datasets.items():
             dataset = TofuDataset(tokenizer=tokenizer, config=dataset_config)
 

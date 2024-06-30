@@ -12,6 +12,9 @@ tofu_base: &tofu_base
 model:
   path: "/path/to/checkpoint-123" # Alternatively, path to directory with checkpoint directories
   tokenizer_path: "/path/to/checkpoint-123"
+  # If base path is set, it's treated as checkpoint-0
+  base_path: "locuslab/tofu_ft_phi-1.5"
+  base_tokenizer_path: "microsoft/phi-1_5"
   fp16: true
 
 datasets:
