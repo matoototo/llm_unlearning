@@ -49,7 +49,7 @@ def plot_metrics(gathered_data, output_dir):
 
     n_datasets = len(datasets)
     n_metrics = len(metrics) + 1
-    fig, axs = plt.subplots(n_datasets, n_metrics, figsize=(24, 6 * n_datasets), sharex=True)
+    fig, axs = plt.subplots(n_datasets, n_metrics, figsize=(8 * n_metrics, 6 * n_datasets), sharex=True)
     if n_datasets == 1:
         axs = axs.reshape(1, -1)
 
