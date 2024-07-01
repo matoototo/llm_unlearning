@@ -99,7 +99,28 @@ class TofuDataset(Dataset):
                 for i in range(len(batch[0][key]))
             ]
 
-        return result
+        return TofuDataset.trim_batch(result)
+
+    @staticmethod
+    def trim_batch(batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        trimmed_batch = {}
+
+        for key in batch:
+            if "question_length" not in key: continue
+            trimmed_batch[key] = batch[key]
+
+        max_length = batch["attention_mask"].sum(dim=1).max().item()
+        for key in ["input_ids", "labels", "attention_mask"]:
+            trimmed_batch[key] = batch[key][:, :max_length]
+
+        perturbed_keys = [k for k in batch if k.startswith("perturbed_") and k != "perturbed_question_length"]
+        if not perturbed_keys: return trimmed_batch
+
+        perturbed_max_length = batch["perturbed_attention_mask"][0].sum(dim=1).max().item()
+        for key in perturbed_keys:
+            trimmed_batch[key] = [tensor[:, :perturbed_max_length] for tensor in batch[key]]
+
+        return trimmed_batch
 
 def get_tofu_dataset(
     tokenizer: PreTrainedTokenizer,
@@ -136,19 +157,8 @@ def get_tofu_dataset(
             result = {}
             for key in ['forget_inputs', 'retain_inputs']:
                 if key not in batch[0]: continue
-
-                result[key] = {
-                    k: torch.stack([item[key][k] for item in batch])
-                    for k in batch[0][key].keys() if not k.startswith("perturbed_")
-                }
-
-                perturbed_keys = [k for k in batch[0][key].keys() if k.startswith("perturbed_")]
-                for p_key in perturbed_keys:
-                    result[key][p_key] = [
-                        torch.stack([item[key][p_key][i] for item in batch])
-                        for i in range(len(batch[0][key][p_key]))
-                    ]
-
+                collected_batch = [item[key] for item in batch]
+                result[key] = TofuDataset.collate_fn(collected_batch)
             return result
 
     return CombinedDataset(forget_dataset, retain_dataset)
