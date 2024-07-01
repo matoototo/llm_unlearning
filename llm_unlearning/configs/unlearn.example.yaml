@@ -23,14 +23,16 @@ dataset:
 unlearning:
     method: "gradient_difference"
 
+output_dir: ./results
+
 training_arguments:
-    output_dir: ./results
+    output_dir: ${hydra:runtime.output_dir}
     num_train_epochs: 3
     per_device_train_batch_size: 1
     per_device_eval_batch_size: 1
     warmup_steps: 500
     weight_decay: 0.01
-    logging_dir: ./logs
+    logging_dir: ${hydra:runtime.output_dir}/logs
     logging_steps: 10
     evaluation_strategy: steps
     eval_steps: 500
@@ -38,3 +40,12 @@ training_arguments:
     fp16: true
     learning_rate: 5e-5
     remove_unused_columns: false
+
+hydra:
+    run:
+        dir: ${output_dir}/${now:%Y-%m-%d_%H-%M-%S}
+    job:
+        chdir: true
+    sweep:
+        dir: ${output_dir}
+        subdir: ${hydra.job.override_dirname}
