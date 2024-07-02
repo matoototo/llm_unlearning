@@ -16,19 +16,17 @@ def get_checkpoint_paths(cfg: DictConfig) -> List[str]:
     # Add base model as checkpoint-0 if base_path is provided
     if cfg.model.get("base_path"): paths.append("checkpoint-0")
 
-    if not os.path.isdir(cfg.model.path):
-        if re.match(r'checkpoint-\d+$', os.path.basename(cfg.model.path)):
-            paths.append(cfg.model.path)
-        else:
-            raise ValueError(f"The path {cfg.model.path} is not a valid checkpoint directory")
+    normalised_path = os.path.normpath(cfg.model.path)
+    if re.match(r'checkpoint-\d+$', os.path.basename(normalised_path)):
+        paths.append(normalised_path)
     else:
         checkpoint_dirs = [
-            os.path.join(cfg.model.path, d) for d in os.listdir(cfg.model.path)
-            if os.path.isdir(os.path.join(cfg.model.path, d)) and re.match(r'checkpoint-\d+$', d)
+            os.path.join(normalised_path, d) for d in os.listdir(normalised_path)
+            if os.path.isdir(os.path.join(normalised_path, d)) and re.match(r'checkpoint-\d+$', d)
         ]
 
         if not checkpoint_dirs:
-            raise ValueError(f"No checkpoint directories found in {cfg.model.path}")
+            raise ValueError(f"No checkpoint directories found in {normalised_path}")
 
         # Sort checkpoint directories by number
         checkpoint_dirs.sort(key=lambda x: int(re.findall(r'\d+', os.path.basename(x))[0]))
