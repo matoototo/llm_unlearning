@@ -1,9 +1,9 @@
 # tofu_evals.py
 import torch
 import torch.nn.functional as F
-import evaluate
 import einops
 
+from rouge_score import rouge_scorer
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Literal
 
@@ -67,9 +67,9 @@ def truth_ratio(
 
 RougeType = Literal['rouge1', 'rouge2', 'rougeL', 'rougeLsum']
 def rouge_score(predictions: List[str], references: List[str], rouge_type: RougeType = 'rougeL') -> List[float]:
-    rouge = evaluate.load('rouge')
-    results = rouge.compute(predictions=predictions, references=references, use_stemmer=True)
-    return results[rouge_type]
+    rouge = rouge_scorer.RougeScorer([rouge_type], use_stemmer=True)
+    recall = sum(rouge.score(ref, pred)[rouge_type].recall for ref, pred in zip(references, predictions))
+    return recall / len(predictions)
 
 class Evaluation(ABC):
     @abstractmethod
@@ -171,6 +171,7 @@ class Rouge(Evaluation):
             pad_token_id=pad_token_id,
             eos_token_id=tokenizer.eos_token_id,
             use_cache=True,
+            do_sample=False,
         )
 
         extracted_outputs = extract_answer_tokens(outputs, question_length, pad_token_id)
@@ -178,6 +179,10 @@ class Rouge(Evaluation):
 
         decoded_outputs = tokenizer.batch_decode(extracted_outputs, skip_special_tokens=True)
         decoded_labels = tokenizer.batch_decode(extracted_labels, skip_special_tokens=True)
+
+        # Strip away "Answer: " prefix
+        decoded_outputs = [output[8:] for output in decoded_outputs]
+        decoded_labels = [label[8:] for label in decoded_labels]
 
         # Returns average but that's fine, we average later anyway
         rouge_score_value = rouge_score(decoded_outputs, decoded_labels, self.rouge_type)
