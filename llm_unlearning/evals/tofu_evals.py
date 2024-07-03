@@ -34,11 +34,15 @@ def probability(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
 
     return length_normalized_probs
 
+def geometric_mean(values: torch.Tensor) -> torch.Tensor:
+    return torch.exp(torch.mean(torch.log(values), dim=-1))
+
 def truth_ratio(
     gt_logits: torch.Tensor,
     gt_labels: torch.Tensor,
     perturb_logits: torch.Tensor,
-    perturb_labels: torch.Tensor
+    perturb_labels: torch.Tensor,
+    tofu_code_equivalent: bool = True
 ) -> torch.Tensor:
     """
     Compute the truth ratio for given ground truth and perturbed logits and labels.
@@ -48,6 +52,7 @@ def truth_ratio(
         gt_labels (batch_size, seq_len)
         perturb_logits (batch_size, perturbations, seq_len, vocab_size)
         perturb_labels (batch_size, perturbations, seq_len)
+        tofu_code_equivalent (bool): if set, uses geometric mean (=codebase) instead of arithmetic mean (=paper).
 
     Returns:
         Truth ratio (batch_size,)
@@ -61,9 +66,9 @@ def truth_ratio(
 
     perturb_probs = einops.rearrange(batched_perturb_probs, '(b p) -> b p', p=p)
 
-    R_truth = torch.mean(perturb_probs, dim=-1) / gt_probs
+    if tofu_code_equivalent: return geometric_mean(perturb_probs) / gt_probs
 
-    return R_truth
+    return torch.mean(perturb_probs, dim=-1) / gt_probs
 
 RougeType = Literal['rouge1', 'rouge2', 'rougeL', 'rougeLsum']
 def rouge_score(predictions: List[str], references: List[str], rouge_type: RougeType = 'rougeL') -> List[float]:
