@@ -45,15 +45,18 @@ class Evaluator:
         total_metric = 0.0
         total_samples = 0
 
+        eval_scores = []
         with torch.no_grad():
             for batch in tqdm(dataloader, desc=desc):
                 batch = self._process_batch(batch)
                 batch_metric = eval.compute(self.model, batch, self.tokenizer, perturb_probability=perturb_probability)
+                eval_scores.extend(batch_metric.cpu().numpy().tolist())
                 total_metric += batch_metric.sum().item()
                 total_samples += batch_metric.size(0)
 
         avg_metric = total_metric / total_samples
-        return {desc.lower().replace(" ", "_"): avg_metric}
+        name = desc.lower().replace(" ", "_")
+        return { name: avg_metric, f"{name}_metadata": eval_scores }
 
     def evaluate(self, dataset: TofuDataset) -> Dict[str, Any]:
         results = {}

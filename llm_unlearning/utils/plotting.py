@@ -13,7 +13,8 @@ def gather_metrics(data, excluded_metrics=None):
 
     checkpoints = list(data.keys())
     datasets = list(data[checkpoints[0]].keys())
-    metrics = [m for m in list(data[checkpoints[0]][datasets[0]].keys()) if m not in excluded_metrics]
+    included_metrics = [m for m in list(data[checkpoints[0]][datasets[0]].keys()) if m not in excluded_metrics and not m.endswith('_metadata')]
+    metrics = [m for m in list(data[checkpoints[0]][datasets[0]].keys()) if m in included_metrics]
 
     gathered_data = {
         "checkpoints": checkpoints,
@@ -34,7 +35,7 @@ def gather_metrics(data, excluded_metrics=None):
                 if not np.isnan(value):
                     checkpoint_metrics.append(value)
 
-            dataset_harmonic_mean = harmonic_mean([v for k, v in dataset_metrics.items() if k not in excluded_metrics and not np.isnan(v)])
+            dataset_harmonic_mean = harmonic_mean([v for k, v in dataset_metrics.items() if k in included_metrics and not np.isnan(v)])
             gathered_data["harmonic_means"][dataset].append(dataset_harmonic_mean)
 
         overall_harmonic_mean = harmonic_mean([m for m in checkpoint_metrics if not np.isnan(m)])
