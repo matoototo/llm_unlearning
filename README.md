@@ -1,5 +1,3 @@
-// llm_unlearning/README.md
-
 ## Installation
 
 The package with all dependencies can be installed locally with:
@@ -9,6 +7,41 @@ pip install -e .
 ```
 
 This makes it an editable package, and all imports will update dynamically.
+
+
+## Usage steps
+
+There are three different operations that can be performed using this package: finetuning, unlearning, and evaluation. They are usually performed in that order, where finetuning normally only needs to be done once.
+
+### 1. Finetuning
+This step is needed to create models finetuned on TOFU subsets or to finetune base models on the full dataset to use for unlearning. This is needed for computing the KS-test in the final evaluation (see TODO), where we compare the TOFU model unlearned on forget10 to a finetuned retain90 model.
+
+**Inputs**: Finetuning dataset and split, config file, base model\
+**Outputs**: Model finetuned on the dataset and split
+
+```bash
+python unlearn.py --config-file configs/finetune.example.yaml # alternatively python -m llm_unlearning.unlearn ...
+```
+
+### 2. Unlearning
+This is the main step. We need a model that is finetuned on the full dataset here. TOFU supplies FT versions of [Phi1.5](https://huggingface.co/locuslab/tofu_ft_phi-1.5) and [Llama2-7b](https://huggingface.co/locuslab/tofu_ft_llama2-7b), but you can also finetune a model with the previous step and use it here.
+
+**Inputs**: Forget dataset and (optionally) retain dataset and splits, config file, finetuned model\
+**Outputs**: Model unlearned on the forget dataset
+
+```bash
+python unlearn.py --config-file configs/unlearn.example.yaml # alternatively python -m llm_unlearning.unlearn ...
+```
+
+### 3. Evaluation
+We need the unlearned model from step 2 and a finetuned "reference" model from step 1. This reference model is needed to compute the KS-test for the Forget Quality metric. The reference model needs to be finetuned on the corresponding retain dataset. For example, if the unlearning was done on forget10, the reference model needs to be finetuned on retain90.
+
+**Inputs**: Unlearning and reference models, evaluation datasets and splits, config file\
+**Outputs**: Evaluation results in JSON format
+
+```bash
+python evaluate_model.py --config-file configs/evaluate.example.yaml # alternatively python -m llm_unlearning.evaluate_model ...
+```
 
 
 ## Unlearning
