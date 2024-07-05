@@ -14,5 +14,6 @@ setup(name='llm_unlearning',
           'omegaconf',
           'wandb',
           'matplotlib',
+          'rouge_score',
       ],
 )

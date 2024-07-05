@@ -19,18 +19,19 @@ def get_checkpoint_paths(cfg: DictConfig) -> List[str]:
     normalised_path = os.path.normpath(cfg.model.path)
     if re.match(r'checkpoint-\d+$', os.path.basename(normalised_path)):
         paths.append(normalised_path)
-    else:
-        checkpoint_dirs = [
-            os.path.join(normalised_path, d) for d in os.listdir(normalised_path)
-            if os.path.isdir(os.path.join(normalised_path, d)) and re.match(r'checkpoint-\d+$', d)
-        ]
+        return paths
 
-        if not checkpoint_dirs:
-            raise ValueError(f"No checkpoint directories found in {normalised_path}")
+    checkpoint_dirs = [
+        os.path.join(normalised_path, d) for d in os.listdir(normalised_path)
+        if os.path.isdir(os.path.join(normalised_path, d)) and re.match(r'checkpoint-\d+$', d)
+    ]
 
-        # Sort checkpoint directories by number
-        checkpoint_dirs.sort(key=lambda x: int(re.findall(r'\d+', os.path.basename(x))[0]))
-        paths.extend(checkpoint_dirs)
+    if not checkpoint_dirs:
+        raise ValueError(f"No checkpoint directories found in {normalised_path}")
+
+    # Sort checkpoint directories by number
+    checkpoint_dirs.sort(key=lambda x: int(re.findall(r'\d+', os.path.basename(x))[0]))
+    paths.extend(checkpoint_dirs)
 
     return paths
 
