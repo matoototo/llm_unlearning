@@ -16,6 +16,9 @@ def get_checkpoint_paths(cfg: DictConfig) -> List[str]:
     # Add base model as checkpoint-0 if base_path is provided
     if cfg.model.get("base_path"): paths.append("checkpoint-0")
 
+    # Add retain model if retain_path is provided
+    if cfg.model.get("retain_path"): paths.append("retain")
+
     normalised_path = os.path.normpath(cfg.model.path)
     if re.match(r'checkpoint-\d+$', os.path.basename(normalised_path)):
         paths.append(normalised_path)
@@ -39,6 +42,9 @@ def load_model_for_evaluation(cfg: DictConfig, checkpoint_path: str) -> Tuple[An
     if checkpoint_path == "checkpoint-0":
         cfg.model.path = cfg.model.base_path
         cfg.model.tokenizer_path = cfg.model.base_tokenizer_path
+    elif checkpoint_path == "retain":
+        cfg.model.path = cfg.model.retain_path
+        cfg.model.tokenizer_path = cfg.model.retain_tokenizer_path
     else:
         cfg.model.path = checkpoint_path
         cfg.model.tokenizer_path = checkpoint_path
@@ -67,6 +73,17 @@ def main(cfg: DictConfig) -> None:
             print(f"Evaluating dataset: {dataset_config.name}")
             results = evaluator.evaluate(dataset=dataset)
             all_results[checkpoint_name][dataset_config.name] = results
+
+    retain_results = all_results.get("retain", {})
+
+    for checkpoint_name, checkpoint_results in all_results.items():
+        if checkpoint_name == "retain": continue
+        for dataset_name, dataset_results in checkpoint_results.items():
+            if dataset_name not in retain_results: continue
+            all_results[checkpoint_name][dataset_name]["aggregate"] = evaluator.compute_aggregate_metrics(
+                retain_results=retain_results[dataset_name],
+                forget_results=dataset_results
+            )
 
     print("\nEvaluation Results Summary:")
     print(json.dumps(all_results, indent=2))

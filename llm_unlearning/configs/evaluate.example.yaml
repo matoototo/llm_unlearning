@@ -15,6 +15,9 @@ model:
   # If base path is set, it's treated as checkpoint-0
   base_path: "locuslab/tofu_ft_phi-1.5"
   base_tokenizer_path: "microsoft/phi-1_5"
+  # Retain model used to evaluate Forget Quality using the KS-test
+  retain_path: "/path/to/retain_model"
+  retain_tokenizer_path: "/path/to/retain_model"
   fp16: true
 
 datasets:
@@ -45,6 +48,9 @@ metrics:
   - truth_ratio
   - probability
   - rouge_l
+
+aggregate_metrics:
+  - ks_test
 
 batch_size: 8
 max_length: 512

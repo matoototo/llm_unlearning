@@ -2,8 +2,9 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from typing import Dict, Any
 import torch
+
 from llm_unlearning.unlearning_datasets.tofu import TofuDataset
-from llm_unlearning.evals.tofu_evals import Evaluation, all_metrics
+from llm_unlearning.evals.tofu_evals import Evaluation, all_metrics, all_aggregate_metrics
 
 class Evaluator:
     def __init__(self, model, tokenizer, config):
@@ -20,6 +21,13 @@ class Evaluator:
                 print(f"Warning: Metric '{metric}' not recognized and will be skipped.")
                 continue
             self.metrics[metric] = all_metrics[metric](self.config)
+
+        self.aggregate_metrics = {}
+        for metric in self.config.aggregate_metrics:
+            if metric not in all_aggregate_metrics:
+                print(f"Warning: Aggregate metric '{metric}' not recognized and will be skipped.")
+                continue
+            self.aggregate_metrics[metric] = all_aggregate_metrics[metric](self.config)
 
     def _get_dataloader(self, dataset: TofuDataset) -> DataLoader:
         return DataLoader(
@@ -65,3 +73,11 @@ class Evaluator:
             results.update(self._compute_metric(dataset, eval, name.capitalize()))
 
         return results
+
+    def compute_aggregate_metrics(self, retain_results: Dict[str, Any], forget_results: Dict[str, Any]) -> Dict[str, Any]:
+        aggregate_results = {}
+
+        for name, metric in self.aggregate_metrics.items():
+            aggregate_results[name] = metric.compute(retain_results, forget_results)
+
+        return aggregate_results

@@ -3,8 +3,10 @@ import torch.nn.functional as F
 import einops
 
 from rouge_score import rouge_scorer
+from scipy.stats import ks_2samp
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Literal
+
 
 def probability(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     """
@@ -79,6 +81,30 @@ class Evaluation(ABC):
     @abstractmethod
     def compute(self, model, batch: Dict[str, Any], tokenizer=None, **kwargs) -> torch.Tensor:
         pass
+
+class AggregateEvaluation(ABC):
+    @abstractmethod
+    def compute(self, retain_results: Dict[str, Any], forget_results: Dict[str, Any]) -> Dict[str, Any]:
+        pass
+
+class KSTest(AggregateEvaluation):
+    def __init__(self, reciprocal: bool = False):
+        # Setting reciprocal to True emulates TOFU behaviour
+        self.reciprocal = reciprocal
+
+    def compute(self, retain_results: Dict[str, Any], forget_results: Dict[str, Any]) -> Dict[str, Any]:
+        retain_scores = retain_results["truth_ratio_metadata"]
+        forget_scores = forget_results["truth_ratio_metadata"]
+
+        if self.reciprocal:
+            retain_scores = [1 / score for score in retain_scores]
+            forget_scores = [1 / score for score in forget_scores]
+
+        ks_statistic, ks_p_value = ks_2samp(retain_scores, forget_scores)
+        return {
+            "ks_statistic": ks_statistic,
+            "ks_p_value": ks_p_value,
+        }
 
 class TruthRatio(Evaluation):
     def compute(self, model, batch: Dict[str, Any], tokenizer=None, **kwargs) -> torch.Tensor:
@@ -200,4 +226,9 @@ all_metrics = {
     "rouge_2": lambda config: Rouge(max_length=config.max_length, rouge_type='rouge2'),
     "rouge_l": lambda config: Rouge(max_length=config.max_length, rouge_type='rougeL'),
     "rouge_lsum": lambda config: Rouge(max_length=config.max_length, rouge_type='rougeLsum'),
+}
+
+all_aggregate_metrics = {
+    "ks_test": lambda config: KSTest(),
+    "ks_test_reciprocal": lambda config: KSTest(reciprocal=True),
 }
