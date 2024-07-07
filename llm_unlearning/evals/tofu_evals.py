@@ -7,6 +7,24 @@ from scipy.stats import ks_2samp
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Literal
 
+def sequence_nll(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    """
+    Compute negative log-likelihood for given logits and labels.
+
+    Args:
+        logits (batch_size, seq_len, vocab_size)
+        labels (batch_size, seq_len)
+
+    Returns:
+        Negative log-likelihood (batch_size,), summed over sequence length
+    """
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
+
+    loss = F.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1), reduction='none', ignore_index=-100)
+    loss = einops.rearrange(loss, '(b s) -> b s', b=shift_labels.size(0))
+
+    return loss.sum(dim=-1)
 
 def probability(logits: torch.Tensor, labels: torch.Tensor, logprobs: bool = False) -> torch.Tensor:
     """

@@ -1,7 +1,9 @@
 import torch
+import torch.nn.functional as F
 
 from typing import Any, Dict, Tuple, List
 from transformers import PreTrainedModel
+from llm_unlearning.evals.tofu_evals import sequence_nll
 
 def check_inputs(required_inputs: List[str], **kwargs):
     missing_inputs = [input_name for input_name in required_inputs if input_name not in kwargs]
@@ -70,11 +72,49 @@ class GradientDifference(Method):
 
         return total_loss, loss_dict, (forget_outputs, retain_outputs)
 
+class NPO(Method):
+    # https://arxiv.org/abs/2404.05868
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.beta = kwargs.get("beta", 0.1)
+        self.retain_coeff = kwargs.get("retain_coeff", 1.0)
+
+    def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
+        check_inputs(["forget_inputs", "retain_inputs"], **kwargs)
+        reference_model = kwargs.get("reference_model") if "reference_model" in kwargs else None
+        if not reference_model: raise ValueError("NPO requires a config.reference_model to be set")
+
+        forget_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
+
+        forget_outputs = model(**forget_inputs)
+        forget_loss = sequence_nll(forget_outputs.logits, forget_inputs["labels"])
+        with torch.no_grad():
+            reference_outputs = reference_model(**forget_inputs)
+            reference_loss = sequence_nll(forget_outputs.logits, forget_inputs["labels"])
+
+        neg_logloss_ratio = (forget_loss - reference_loss)
+        npo_loss = (F.logsigmoid(self.beta * neg_logloss_ratio) * -2 / self.beta).mean()
+
+        if self.retain_coeff:
+            retain_inputs = {k: v for k, v in kwargs['retain_inputs'].items() if k in self.input_keys}
+            retain_outputs = model(**retain_inputs)
+            npo_loss += self.retain_coeff * retain_outputs.loss
+
+        loss_dict = {
+            "npo_loss": npo_loss.item(),
+            "forget_loss": forget_loss.mean().item(),
+            "reference_loss": reference_loss.mean().item(),
+        }
+
+        return npo_loss, loss_dict, (forget_outputs, reference_outputs)
+
+
 def get_method(method_name: str, **kwargs) -> Method:
     methods = {
         "gradient_ascent": GradientAscent,
         "gradient_descent": GradientDescent,
         "gradient_difference": GradientDifference,
+        "npo": NPO,
     }
 
     if method_name not in methods:

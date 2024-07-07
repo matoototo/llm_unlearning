@@ -6,13 +6,15 @@ class UnlearningTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         method = kwargs.pop("method")
         unlearning_kwargs = kwargs.pop("unlearning_kwargs", {})
+        self.reference_model = kwargs.pop("reference_model", None)
         super().__init__(*args, **kwargs)
         self.method = get_method(method, **unlearning_kwargs)
         self.loss_components: Dict[str, float] = {}
         self.loss_component_counts: Dict[str, int] = {}
+        self.reference_model = self.reference_model.to(self.args.device) if self.reference_model else None
 
     def compute_loss(self, model, inputs, return_outputs=False):
-        loss, loss_dict, outputs = self.method.compute_loss(model, **inputs)
+        loss, loss_dict, outputs = self.method.compute_loss(model, **inputs, reference_model=self.reference_model)
 
         for loss_name, loss_value in loss_dict.items():
             self.accumulate_loss(loss_name, loss_value)

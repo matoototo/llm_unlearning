@@ -15,5 +15,6 @@ setup(name='llm_unlearning',
           'wandb',
           'matplotlib',
           'rouge_score',
+          'scipy',
       ],
 )

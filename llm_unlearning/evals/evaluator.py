@@ -23,7 +23,7 @@ class Evaluator:
             self.metrics[metric] = all_metrics[metric](self.config)
 
         self.aggregate_metrics = {}
-        for metric in self.config.aggregate_metrics:
+        for metric in self.config.get("aggregate_metrics", []):
             if metric not in all_aggregate_metrics:
                 print(f"Warning: Aggregate metric '{metric}' not recognized and will be skipped.")
                 continue
