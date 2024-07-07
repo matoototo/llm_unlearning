@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Literal
 
 
-def probability(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+def probability(logits: torch.Tensor, labels: torch.Tensor, logprobs: bool = False) -> torch.Tensor:
     """
     Compute length-normalized probabilities for given logits and labels.
 
@@ -31,9 +31,8 @@ def probability(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     sequence_losses = loss.sum(dim=-1)
     length_normalized_losses = sequence_losses / sequence_lengths
 
-    length_normalized_probs = torch.exp(-length_normalized_losses)
-
-    return length_normalized_probs
+    if logprobs: return -length_normalized_losses
+    return torch.exp(-length_normalized_losses)
 
 def geometric_mean(values: torch.Tensor) -> torch.Tensor:
     return torch.exp(torch.mean(torch.log(values), dim=-1))
@@ -59,17 +58,19 @@ def truth_ratio(
         Truth ratio (batch_size,)
     """
     b, p, s, v = perturb_logits.shape
-    gt_probs = probability(gt_logits, gt_labels)
-
+    gt_logprobs = probability(gt_logits, gt_labels, logprobs=True)
     batched_perturb_logits = einops.rearrange(perturb_logits, 'b p s v -> (b p) s v')
     batched_perturb_labels = einops.rearrange(perturb_labels, 'b p s -> (b p) s')
-    batched_perturb_probs = probability(batched_perturb_logits, batched_perturb_labels)
+    batched_perturb_logprobs = probability(batched_perturb_logits, batched_perturb_labels, logprobs=True)
+    perturb_logprobs = einops.rearrange(batched_perturb_logprobs, '(b p) -> b p', p=p)
 
-    perturb_probs = einops.rearrange(batched_perturb_probs, '(b p) -> b p', p=p)
+    if tofu_code_equivalent: # -> geomean of probs
+        mean_perturb_logprobs = torch.mean(perturb_logprobs, dim=-1)
+    else: # -> mean of probs
+        mean_perturb_logprobs = torch.logsumexp(perturb_logprobs, dim=-1) - torch.log(torch.tensor(p))
 
-    if tofu_code_equivalent: return geometric_mean(perturb_probs) / gt_probs
-
-    return torch.mean(perturb_probs, dim=-1) / gt_probs
+    log_truth_ratio = mean_perturb_logprobs - gt_logprobs
+    return torch.exp(log_truth_ratio)
 
 RougeType = Literal['rouge1', 'rouge2', 'rougeL', 'rougeLsum']
 def rouge_score(predictions: List[str], references: List[str], rouge_type: RougeType = 'rougeL') -> List[float]:
