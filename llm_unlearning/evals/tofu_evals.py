@@ -118,7 +118,7 @@ class KSTest(AggregateEvaluation):
 
 class ModelUtility(AggregateEvaluation):
     def compute(self, _: Dict[str, Any], checkpoint_results: Dict[str, Any]) -> torch.tensor:
-        metric_values = [checkpoint_results["metrics"][dataset][metric] for dataset in checkpoint_results["metrics"] for metric in checkpoint_results["metrics"][dataset]]
+        metric_values = [checkpoint_results["metrics"][dataset][metric] for dataset in checkpoint_results["metrics"] for metric in checkpoint_results["metrics"][dataset] if not metric.endswith("_metadata")]
         return harmonic_mean(torch.tensor(metric_values))
 
 class TruthRatio(Evaluation):
