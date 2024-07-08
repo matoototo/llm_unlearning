@@ -62,7 +62,7 @@ def main(cfg: DictConfig) -> None:
         checkpoint_name = os.path.basename(checkpoint_path)
         print(f"\nEvaluating {checkpoint_name}")
 
-        all_results[checkpoint_name] = {}
+        all_results[checkpoint_name] = { "metrics": {}, "aggregate_metrics": {} }
 
         model, tokenizer = load_model_for_evaluation(cfg, checkpoint_path)
         evaluator = Evaluator(model=model, tokenizer=tokenizer, config=cfg)
@@ -72,18 +72,16 @@ def main(cfg: DictConfig) -> None:
 
             print(f"Evaluating dataset: {dataset_config.name}")
             results = evaluator.evaluate(dataset=dataset)
-            all_results[checkpoint_name][dataset_config.name] = results
+            all_results[checkpoint_name]["metrics"][dataset_config.name] = results
 
     retain_results = all_results.get("retain", {})
 
     for checkpoint_name, checkpoint_results in all_results.items():
         if checkpoint_name == "retain": continue
-        for dataset_name, dataset_results in checkpoint_results.items():
-            if dataset_name not in retain_results: continue
-            all_results[checkpoint_name][dataset_name]["aggregate"] = evaluator.compute_aggregate_metrics(
-                retain_results=retain_results[dataset_name],
-                forget_results=dataset_results
-            )
+        all_results[checkpoint_name]["aggregate_metrics"] = evaluator.compute_aggregate_metrics(
+            retain_results=retain_results,
+            checkpoint_results=checkpoint_results
+        )
 
     print("\nEvaluation Results Summary:")
     print(json.dumps(all_results, indent=2))

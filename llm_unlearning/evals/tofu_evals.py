@@ -55,6 +55,9 @@ def probability(logits: torch.Tensor, labels: torch.Tensor, logprobs: bool = Fal
 def geometric_mean(values: torch.Tensor) -> torch.Tensor:
     return torch.exp(torch.mean(torch.log(values), dim=-1))
 
+def harmonic_mean(values: torch.Tensor) -> torch.Tensor:
+    return values.size(0) / torch.sum(1.0 / values)
+
 def truth_ratio(
     gt_logits: torch.Tensor,
     gt_labels: torch.Tensor,
@@ -103,27 +106,20 @@ class Evaluation(ABC):
 
 class AggregateEvaluation(ABC):
     @abstractmethod
-    def compute(self, retain_results: Dict[str, Any], forget_results: Dict[str, Any]) -> Dict[str, Any]:
+    def compute(self, retain_results: Dict[str, Any], checkpoint_results: Dict[str, Any]) -> torch.tensor:
         pass
 
 class KSTest(AggregateEvaluation):
-    def __init__(self, reciprocal: bool = False):
-        # Setting reciprocal to True emulates TOFU behaviour
-        self.reciprocal = reciprocal
-
-    def compute(self, retain_results: Dict[str, Any], forget_results: Dict[str, Any]) -> Dict[str, Any]:
-        retain_scores = retain_results["truth_ratio_metadata"]
-        forget_scores = forget_results["truth_ratio_metadata"]
-
-        if self.reciprocal:
-            retain_scores = [1 / score for score in retain_scores]
-            forget_scores = [1 / score for score in forget_scores]
-
+    def compute(self, retain_results: Dict[str, Any], checkpoint_results: Dict[str, Any]) -> torch.tensor:
+        retain_scores = retain_results["metrics"]["tofu_forget"]["truth_ratio_metadata"]
+        forget_scores = checkpoint_results["metrics"]["tofu_forget"]["truth_ratio_metadata"]
         ks_statistic, ks_p_value = ks_2samp(retain_scores, forget_scores)
-        return {
-            "ks_statistic": ks_statistic,
-            "ks_p_value": ks_p_value,
-        }
+        return ks_p_value
+
+class ModelUtility(AggregateEvaluation):
+    def compute(self, _: Dict[str, Any], checkpoint_results: Dict[str, Any]) -> torch.tensor:
+        metric_values = [checkpoint_results["metrics"][dataset][metric] for dataset in checkpoint_results["metrics"] for metric in checkpoint_results["metrics"][dataset]]
+        return harmonic_mean(torch.tensor(metric_values))
 
 class TruthRatio(Evaluation):
     def compute(self, model, batch: Dict[str, Any], tokenizer=None, **kwargs) -> torch.Tensor:
@@ -249,5 +245,5 @@ all_metrics = {
 
 all_aggregate_metrics = {
     "ks_test": lambda config: KSTest(),
-    "ks_test_reciprocal": lambda config: KSTest(reciprocal=True),
+    "model_utility": lambda config: ModelUtility()
 }
