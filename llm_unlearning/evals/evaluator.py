@@ -78,6 +78,6 @@ class Evaluator:
         aggregate_results = {}
 
         for name, metric in self.aggregate_metrics.items():
-            aggregate_results[name] = metric.compute(retain_results, checkpoint_results)
+            aggregate_results[name] = metric.compute(retain_results, checkpoint_results).item()
 
         return aggregate_results

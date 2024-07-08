@@ -4,6 +4,40 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 
+class Results:
+    def __init__(self, json_data):
+        self.data = json_data
+
+    def __getitem__(self, key):
+        return self.data[key]
+
+    def checkpoints(self, exclude = None):
+        if exclude is None: exclude = ["retain"]
+        checkpoints = [k for k in self.data.keys() if not k in exclude]
+        checkpoints.sort(key=lambda x: int(x.split('-')[1]) if x != "checkpoint-0" else -1)
+        return checkpoints
+
+    def datasets(self, checkpoint, exclude = None):
+        if exclude is None: exclude = []
+        return [k for k in self[checkpoint]["metrics"].keys() if not k in exclude]
+
+    def metrics(self, checkpoint, dataset, exclude = None):
+        if exclude is None: exclude = []
+        return [k for k in self[checkpoint]["metrics"][dataset].keys() if not k in exclude and not k.endswith('_metadata')]
+
+    def metric_values(self, checkpoint, dataset, metric):
+        return self[checkpoint]["metrics"][dataset][metric]
+
+    def checkpoint_metric_data(self, dataset, metric):
+        checkpoints = self.checkpoints()
+        return [self.metric_values(checkpoint, dataset, metric) for checkpoint in checkpoints]
+
+    def harmonic_mean(self, checkpoint, dataset):
+        metrics = self.metrics(checkpoint, dataset)
+        flat_values = [self.metric_values(checkpoint, dataset, metric) for metric in metrics]
+        return harmonic_mean(flat_values)
+
+
 def harmonic_mean(arr):
     return len(arr) / np.sum(1.0 / np.array(arr))
 
@@ -11,39 +45,32 @@ def gather_metrics(data, excluded_metrics=None):
     if excluded_metrics is None:
         excluded_metrics = []
 
-    checkpoints = list(data.keys())
-    datasets = list(data[checkpoints[0]].keys())
-    included_metrics = [m for m in list(data[checkpoints[0]][datasets[0]].keys()) if m not in excluded_metrics and not m.endswith('_metadata')]
-    metrics = [m for m in list(data[checkpoints[0]][datasets[0]].keys()) if m in included_metrics]
+    results = Results(data)
+
+    checkpoints = results.checkpoints()
+    datasets = results.datasets(checkpoints[0])
+    included_metrics = results.metrics(checkpoints[0], datasets[0], excluded_metrics)
 
     gathered_data = {
         "checkpoints": checkpoints,
         "datasets": datasets,
-        "metrics": metrics,
-        "metric_data": {dataset: {metric: [] for metric in metrics} for dataset in datasets},
+        "metrics": included_metrics,
+        "metric_data": {dataset: {metric: results.checkpoint_metric_data(dataset, metric) for metric in included_metrics} for dataset in datasets},
         "harmonic_means": {dataset: [] for dataset in datasets},
-        "overall_harmonic_means": []
+        "overall_harmonic_means": [],
+        "aggregate_metrics": []
     }
 
+    # Calculate harmonic means
     for checkpoint in checkpoints:
-        checkpoint_metrics = []
         for dataset in datasets:
-            dataset_metrics = data[checkpoint].get(dataset, {})
-            for metric in metrics:
-                value = dataset_metrics.get(metric, np.nan)
-                gathered_data["metric_data"][dataset][metric].append(value)
-                if not np.isnan(value):
-                    checkpoint_metrics.append(value)
-
-            dataset_harmonic_mean = harmonic_mean([v for k, v in dataset_metrics.items() if k in included_metrics and not np.isnan(v)])
-            gathered_data["harmonic_means"][dataset].append(dataset_harmonic_mean)
-
-        overall_harmonic_mean = harmonic_mean([m for m in checkpoint_metrics if not np.isnan(m)])
-        gathered_data["overall_harmonic_means"].append(overall_harmonic_mean)
+            gathered_data["harmonic_means"][dataset].append(results.harmonic_mean(checkpoint, dataset))
+        gathered_data["overall_harmonic_means"].append(harmonic_mean([hm for dataset in datasets for hm in gathered_data["harmonic_means"][dataset]]))
 
     return gathered_data
 
-def plot_metrics(gathered_data, output_dir):
+def plot_metrics(gathered_data, output_dir, log_scale = None):
+    if log_scale is None: log_scale = ['probability']
     checkpoints = gathered_data["checkpoints"]
     datasets = gathered_data["datasets"]
     metrics = gathered_data["metrics"]
@@ -67,16 +94,13 @@ def plot_metrics(gathered_data, output_dir):
 
     for i, dataset in enumerate(datasets):
         for j, (metric, color) in enumerate(zip(['harmonic_mean'] + metrics, colors)):
-            if metric == 'harmonic_mean':
-                y_data = gathered_data["harmonic_means"][dataset]
-            else:
-                y_data = gathered_data["metric_data"][dataset][metric]
+            if metric == 'harmonic_mean': y_data = gathered_data["harmonic_means"][dataset]
+            else: y_data = gathered_data["metric_data"][dataset][metric]
+            if metric in log_scale: axs[i, j].set_yscale('log')
             label = label_map.get(metric, metric.capitalize())
             axs[i, j].plot(checkpoints, y_data, marker='o', color=color)
             axs[i, j].set_title(f'{label} ({dataset})')
             axs[i, j].set_ylabel(label)
-            if label == 'Probability (Log Scale)':
-                axs[i, j].set_yscale('log')
             axs[i, j].grid(True)
             axs[i, j].tick_params(axis='x', rotation=45)
 
@@ -100,21 +124,53 @@ def plot_metrics(gathered_data, output_dir):
 
     return metrics_plot_path, overall_plot_path
 
+def plot_aggregate_metrics(data, output_dir, log_scale = None):
+    if log_scale is None: log_scale = ['ks_test', 'model_utility']
+    checkpoints = [cp for cp in data.keys() if cp != "retain"]
+    checkpoints.sort(key=lambda x: int(x.split('-')[1]) if x != "checkpoint-0" else -1)
+
+    aggregate_metrics = list(data[checkpoints[0]]["aggregate_metrics"].keys())
+
+    n_metrics = len(aggregate_metrics)
+    fig, axs = plt.subplots(1, n_metrics, figsize=(6 * n_metrics, 5), squeeze=False)
+
+    colors = ['red', 'blue', 'green', 'purple', 'orange']
+
+    for i, metric in enumerate(aggregate_metrics):
+        y_data = [data[cp]["aggregate_metrics"][metric] for cp in checkpoints]
+        if metric in log_scale: axs[0, i].set_yscale('log')
+        axs[0, i].plot(checkpoints, y_data, marker='o', color=colors[i % len(colors)])
+        axs[0, i].set_title(metric.replace('_', ' ').title())
+        axs[0, i].set_ylabel('Value')
+        axs[0, i].grid(True)
+        axs[0, i].tick_params(axis='x', rotation=45)
+
+    plt.tight_layout()
+    aggregate_plot_path = os.path.join(output_dir, 'aggregate_metrics.png')
+    plt.savefig(aggregate_plot_path)
+    plt.close()
+
+    return aggregate_plot_path
+
+
 def plot_metrics_across_checkpoints(data, output_dir, excluded_metrics=None):
     os.makedirs(output_dir, exist_ok=True)
     gathered_data = gather_metrics(data, excluded_metrics)
-    return plot_metrics(gathered_data, output_dir)
+    metrics_plot, overall_plot = plot_metrics(gathered_data, output_dir)
+    aggregate_plot = plot_aggregate_metrics(data, output_dir)
+    return metrics_plot, overall_plot, aggregate_plot
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("input_json", help="Path to JSON created by llm_unlearning.evaluate_model.")
     parser.add_argument("output_dir", help="Directory to save plots in.")
-    parser.add_argument("--exclude_metrics", nargs="*", default=["truth_ratio"], help="List of metrics to exclude from plotting and harmonic mean computation.")
+    parser.add_argument("--exclude_metrics", nargs="*", help="List of metrics to exclude from plotting and harmonic mean computation.")
     args = parser.parse_args()
 
     with open(args.input_json, 'r') as f:
         data = json.load(f)
 
-    metrics_plot, overall_plot = plot_metrics_across_checkpoints(data, args.output_dir, args.exclude_metrics)
+    metrics_plot, overall_plot, aggregate_plot = plot_metrics_across_checkpoints(data, args.output_dir, args.exclude_metrics)
     print(f"Metrics plot saved to: {metrics_plot}")
     print(f"Overall harmonic mean plot saved to: {overall_plot}")
+    print(f"Aggregate metrics plot saved to: {aggregate_plot}")
