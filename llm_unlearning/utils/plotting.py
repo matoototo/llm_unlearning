@@ -26,7 +26,11 @@ class Results:
         return [k for k in self[checkpoint]["metrics"][dataset].keys() if not k in exclude and not k.endswith('_metadata')]
 
     def metric_values(self, checkpoint, dataset, metric):
-        return self[checkpoint]["metrics"][dataset][metric]
+        if not metric == "truth_ratio":
+            return self[checkpoint]["metrics"][dataset][metric]
+        # Truth ratio needs to go through max(0, 1 - value)
+        metric = "truth_ratio_metadata"
+        return np.mean([np.maximum(0, 1 - v) for v in self[checkpoint]["metrics"][dataset][metric]])
 
     def checkpoint_metric_data(self, dataset, metric):
         checkpoints = self.checkpoints()

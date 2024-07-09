@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 import einops
+import numpy as np
 
 from rouge_score import rouge_scorer
 from scipy.stats import ks_2samp
@@ -118,7 +119,10 @@ class KSTest(AggregateEvaluation):
 
 class ModelUtility(AggregateEvaluation):
     def compute(self, _: Dict[str, Any], checkpoint_results: Dict[str, Any]) -> torch.tensor:
-        metric_values = [checkpoint_results["metrics"][dataset][metric] for dataset in checkpoint_results["metrics"] for metric in checkpoint_results["metrics"][dataset] if not metric.endswith("_metadata")]
+        metric_values = [checkpoint_results["metrics"][dataset][metric] for dataset in checkpoint_results["metrics"] for metric in checkpoint_results["metrics"][dataset] if not metric.endswith("_metadata") and metric != "truth_ratio"]
+
+        truth_ratios = [np.array(checkpoint_results["metrics"][dataset]["truth_ratio_metadata"]) for dataset in checkpoint_results["metrics"]]
+        metric_values.extend([np.mean(np.maximum(0, 1 - truth_ratios[i])) for i in range(len(truth_ratios))])
         return harmonic_mean(torch.tensor(metric_values))
 
 class TruthRatio(Evaluation):
