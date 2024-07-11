@@ -43,6 +43,10 @@ training_arguments:
     learning_rate: 1e-5
     remove_unused_columns: false
 
+# For doing joint unlearning and evaluation through llm_unlearning.unlearn_evaluate
+evaluate_config: evaluate.yaml
+rewrite_eval_model_path: true
+
 hydra:
     run:
         dir: ${output_dir}/${now:%Y-%m-%d_%H-%M-%S}

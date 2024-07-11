@@ -43,6 +43,40 @@ We need the unlearned model from step 2 and a finetuned "reference" model from s
 python evaluate_model.py --config-name evaluate.example.yaml # alternatively python -m llm_unlearning.evaluate_model ...
 ```
 
+## Combined Unlearning and Evaluation
+
+For convenience, there's a combined script that performs both unlearning and evaluation in sequence. This is useful when you want to immediately evaluate the results without having to manually orchestrate the process.
+
+### Usage
+
+To use the combined unlearning and evaluation script, run:
+
+```bash
+python unlearn_evaluate.py # alternatively python -m llm_unlearning.unlearn_evaluate
+```
+
+This script uses the config located in `llm_unlearning/configs/unlearn.yaml` by default.
+
+### Config Requirements
+
+Your `unlearn.yaml` config relies on these fields to enable combined unlearning and evaluation:
+
+- `evaluate_config`: Path to the evaluation config file, relative to the `configs` directory.
+- `rewrite_eval_model_path`: Boolean flag to determine whether to automatically update the evaluation config to use the newly unlearned model (usually shuold be left at `true`).
+
+Example additions to `unlearn.yaml`:
+
+```yaml
+# For doing joint unlearning and evaluation
+evaluate_config: evaluate.yaml
+rewrite_eval_model_path: true
+```
+
+### Process
+
+1. The script first performs the unlearning process using the configuration in `unlearn.yaml`.
+2. If `rewrite_eval_model_path` is set to `true`, it updates the evaluation config to use the path of the newly unlearned model.
+3. It then runs the evaluation process using the (potentially updated) evaluation config.
 
 ## Unlearning
 
