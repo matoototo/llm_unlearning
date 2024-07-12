@@ -11,7 +11,7 @@ def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
 
     model, tokenizer = load_model_and_tokenizer(cfg.model)
-    reference_model, _ = load_model_and_tokenizer(cfg.reference_model) if cfg.reference_model else (None, None)
+    reference_model, _ = load_model_and_tokenizer(cfg.reference_model) if cfg.get("reference_model") else (None, None)
     dataset, collate_fn = load_unlearning_dataset(cfg.dataset, tokenizer)
     training_args = cfg_to_training_args(cfg.training_arguments)
 

@@ -23,13 +23,13 @@ unlearning:
 output_dir: ./results
 
 training_arguments:
-    output_dir: ${hydra:runtime.output_dir}
+    output_dir: ${output_dir}
     num_train_epochs: 5
     warmup_steps: 3600 # 1 epoch for retain90
     per_device_train_batch_size: 1
     per_device_eval_batch_size: 1
     weight_decay: 0.01
-    logging_dir: ${hydra:runtime.output_dir}/logs
+    logging_dir: ${output_dir}/logs
     logging_steps: 10
     save_steps: 0.1
     fp16: true

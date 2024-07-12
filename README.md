@@ -43,7 +43,7 @@ We need the unlearned model from step 2 and a finetuned "reference" model from s
 python evaluate_model.py --config-name evaluate.example.yaml # alternatively python -m llm_unlearning.evaluate_model ...
 ```
 
-## Combined Unlearning and Evaluation
+## Combined Unlearning and Evaluation (and FT)
 
 For convenience, there's a combined script that performs both unlearning and evaluation in sequence. This is useful when you want to immediately evaluate the results without having to manually orchestrate the process.
 
@@ -62,14 +62,18 @@ This script uses the config located in `llm_unlearning/configs/unlearn.yaml` by 
 Your `unlearn.yaml` config relies on these fields to enable combined unlearning and evaluation:
 
 - `evaluate_config`: Path to the evaluation config file, relative to the `configs` directory.
-- `rewrite_eval_model_path`: Boolean flag to determine whether to automatically update the evaluation config to use the newly unlearned model (usually shuold be left at `true`).
+- `finetune_config`: Path to the finetuning config file, relative to the `configs` directory. Needed if also finetuning.
+- `rewrite_eval_model_path`: True -> update the evaluation config to use the newly unlearned model (usually should be left at `true`).
+- `finetune_again`: True -> finetunes model irrespective of retain_path.
 
 Example additions to `unlearn.yaml`:
 
 ```yaml
 # For doing joint unlearning and evaluation
 evaluate_config: evaluate.yaml
+finetune_config: finetune.example.yaml
 rewrite_eval_model_path: true
+finetune_again: false
 ```
 
 ### Process
@@ -148,7 +152,7 @@ python evaluate_model.py # alternatively python -m llm_unlearning.evaluate_model
 This will by default use the config located in `llm_unlearning/configs/evaluate.yaml`. An example config is located in the same directory. This example config evaluates Phi1.5 on various TOFU datasets using different metrics.
 
 ### Evaluation Config
-The evaluation config is very similar to the unlearning config. Therefore, only the subfields that are different are listed. 
+The evaluation config is very similar to the unlearning config. Therefore, only the subfields that are different are listed.
 
 #### tofu_base
 This is similar to the base dataset in the unlearning config. perturb_probability specifies whether to make the calculation of the probability relative to the perturbed set. This affects the probability metric. Perturbed answers are also used for calculating the truth ratio, so a valid perturbed_answer_key is needed if truth_ratio is enabled. These are the two additional fields, rest are same as unlearning#tofu_base:
