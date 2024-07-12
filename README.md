@@ -164,24 +164,27 @@ Similar to the model in the unlearning config. Can also point to a directory wit
 - `base_path`: Path to the base model (treated as checkpoint-0)
 - `base_tokenizer_path`: Path to the base tokenizer
 
+#### evaluation_groups
+A list of evaluation groups, each containing:
+- `name`: Name of the evaluation group
+- `datasets`: The datasets to be used in this evaluation group (see below)
+- `metrics`: A list of metrics to be used for evaluation. Available metrics are found in `llm_unlearning/evals/tofu_evals.py`. Specified in order of evaluation.
+- `aggregate_metrics`: A list of aggregate metrics (e.g., KS-test)
+- `save_results_path`: The file path where the results for this group will be saved (JSON format)
+
+This enables specifying both forget and retain evaluation in a single config file, as shown in the example config.
+
 #### datasets
-The datasets to be used in evaluation. Multiple datasets can be specified, and they will be evaluated in order. Each dataset inherits from the tofu_base anchor.
+The datasets to be used in evaluation. Multiple datasets can be specified within each evaluation group, and they will be evaluated in order. Each dataset inherits from the tofu_base anchor.
 - `name`: Name of the dataset
 - `split`: Split of the dataset to use
 - `perturb_probability`: Whether to use perturb probability (overrides tofu_base setting)
-
-#### metrics
-A list of metrics to be used for evaluation. Available metrics can be found at the bottom of `llm_unlearning/evals/tofu_evals.py`. They are specified in order of evaluation.
 
 #### batch_size
 The batch size to use during evaluation.
 
 #### max_length
 The maximum length for generation during evaluation (only relevant for ROUGE).
-
-#### save_results_path
-The file path where the results will be saved, JSON format.
-
 
 ## Plotting
 
