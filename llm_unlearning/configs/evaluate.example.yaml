@@ -7,6 +7,7 @@ tofu_base: &tofu_base
   question_key: "question"
   answer_key: "answer"
   perturbed_answer_key: "perturbed_answer"
+  paraphrased_answer_key: "paraphrased_answer"
   perturb_probability: false
 
 model:
@@ -29,29 +30,30 @@ evaluation_groups:
       tofu_forget:
         <<: *tofu_base
         name: "tofu_forget"
-        split: "forget10_perturbed"
+        split: "forget01_perturbed"
     metrics:
       - truth_ratio
     aggregate_metrics:
       - ks_test
-    save_results_path: "/path/to/forget_results.json"
+    save_results_path: "./forget_results.json"
 
   - name: "retain_evaluation"
     datasets:
       tofu_retain:
         <<: *tofu_base
         name: "tofu_retain"
-        answer_key: "paraphrased_answer"
         split: "retain_perturbed"
       real_authors:
         <<: *tofu_base
         name: "real_authors"
         split: "real_authors_perturbed"
+        paraphrased_answer_key: "answer"
         perturb_probability: true
       world_facts:
         <<: *tofu_base
         name: "world_facts"
         split: "world_facts_perturbed"
+        paraphrased_answer_key: "answer"
         perturb_probability: true
     metrics:
       - truth_ratio
@@ -59,4 +61,5 @@ evaluation_groups:
       - rouge_l
     aggregate_metrics:
       - model_utility
-    save_results_path: "/path/to/retain_results.json"
+    save_results_path: "./retain_results.json"
+

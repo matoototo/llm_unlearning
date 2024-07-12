@@ -127,10 +127,9 @@ class ModelUtility(AggregateEvaluation):
 
 class TruthRatio(Evaluation):
     def compute(self, model, batch: Dict[str, Any], tokenizer=None, **kwargs) -> torch.Tensor:
-        input_keys = ["input_ids", "attention_mask", "labels"]
-        gt_outputs = model(**{k: v for k, v in batch.items() if k in input_keys})
+        gt_outputs = model(input_ids=batch["paraphrased_input_ids"], attention_mask=batch["paraphrased_attention_mask"])
         gt_logits = gt_outputs.logits
-        gt_labels = batch["labels"]
+        gt_labels = batch["paraphrased_labels"]
 
         perturbed_logits = []
         perturbed_labels = []

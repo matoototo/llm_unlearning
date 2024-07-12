@@ -30,14 +30,20 @@ class TofuDataset(Dataset):
 
         result = self._encode_qa_pair(question, answer)
 
+        _result_keys = list(result.keys())
         if hasattr(self.config, 'perturbed_answer_key'):
-            _result_keys = list(result.keys())
             perturbed_answers = item[self.config.perturbed_answer_key]
             for key in _result_keys:
                 result[f"perturbed_{key}"] = [
                     self._encode_qa_pair(question, perturbed_answer)[key]
                     for perturbed_answer in perturbed_answers
                 ]
+
+        if hasattr(self.config, 'paraphrased_answer_key'):
+            paraphrased_answer = item[self.config.paraphrased_answer_key]
+            paraphrased_result = self._encode_qa_pair(question, paraphrased_answer)
+            for key in _result_keys:
+                result[f"paraphrased_{key}"] = paraphrased_result[key]
 
         return result
 
@@ -104,6 +110,7 @@ class TofuDataset(Dataset):
     @staticmethod
     def trim_batch(batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         trimmed_batch = {}
+        has_paraphrased = any(k.startswith("paraphrased_") for k in batch)
 
         for key in batch:
             if "question_length" not in key: continue
@@ -112,6 +119,11 @@ class TofuDataset(Dataset):
         max_length = batch["attention_mask"].sum(dim=1).max().item()
         for key in ["input_ids", "labels", "attention_mask"]:
             trimmed_batch[key] = batch[key][:, :max_length]
+
+        if has_paraphrased:
+            paraphrased_max_length = batch["paraphrased_attention_mask"].sum(dim=1).max().item()
+            for key in ["paraphrased_input_ids", "paraphrased_labels", "paraphrased_attention_mask"]:
+                trimmed_batch[key] = batch[key][:, :paraphrased_max_length]
 
         perturbed_keys = [k for k in batch if k.startswith("perturbed_") and k != "perturbed_question_length"]
         if not perturbed_keys: return trimmed_batch
