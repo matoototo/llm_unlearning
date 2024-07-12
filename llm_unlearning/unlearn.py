@@ -23,6 +23,7 @@ def main(cfg: DictConfig) -> None:
         tokenizer=tokenizer,
         data_collator=collate_fn,
         method=cfg.unlearning.method,
+        unlearning_kwargs=cfg.unlearning.get("kwargs", {}),
     )
 
     trainer.train()
