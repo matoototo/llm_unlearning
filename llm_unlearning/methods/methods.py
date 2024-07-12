@@ -90,7 +90,7 @@ class NPO(Method):
         forget_loss = sequence_nll(forget_outputs.logits, forget_inputs["labels"])
         with torch.no_grad():
             reference_outputs = reference_model(**forget_inputs)
-            reference_loss = sequence_nll(forget_outputs.logits, forget_inputs["labels"])
+            reference_loss = sequence_nll(reference_outputs.logits, forget_inputs["labels"])
 
         neg_logloss_ratio = (forget_loss - reference_loss)
         npo_loss = (F.logsigmoid(self.beta * neg_logloss_ratio) * -2 / self.beta).mean()
