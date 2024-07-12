@@ -12,36 +12,39 @@ model:
     tokenizer_path: "microsoft/phi-1_5"
 
 # Currently only used for NPO, not needed otherwise
-# reference_model:
-#     path: "locuslab/tofu_ft_phi-1.5"
-#     tokenizer_path: "microsoft/phi-1_5"
+reference_model:
+    path: "locuslab/tofu_ft_phi-1.5"
+    tokenizer_path: "microsoft/phi-1_5"
 
 dataset:
     name: "tofu"
     forget:
         <<: *base_dataset
-        split: "forget10"
+        split: "forget01"
     retain:
         <<: *base_dataset
-        split: "retain90"
+        split: "retain99"
 
 unlearning:
-    method: "gradient_difference"
+    method: "npo"
 
 output_dir: ./results
 
 training_arguments:
     output_dir: ${output_dir}
-    num_train_epochs: 5
+    num_train_epochs: 10
     weight_decay: 0.01
-    per_device_train_batch_size: 16
-    warmup_steps: 30
+    per_device_train_batch_size: 4
+    gradient_accumulation_steps: 8
+    warmup_ratio: 0.1
     logging_dir: ${output_dir}/logs
     logging_steps: 10
     save_steps: 0.2
     fp16: true
     learning_rate: 1e-5
     remove_unused_columns: false
+    save_only_model: true
+
 
 # For doing joint unlearning and evaluation through llm_unlearning.unlearn_evaluate
 evaluate_config: evaluate.yaml
@@ -51,7 +54,7 @@ finetune_again: false  # Set to true to force finetuning even if a retain model 
 
 hydra:
     run:
-        dir: ${output_dir}/${now:%Y-%m-%d_%H-%M-%S}
+        dir: ${output_dir}
     job:
         chdir: true
     sweep:
