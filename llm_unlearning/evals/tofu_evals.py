@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import einops
 import numpy as np
 
-from rouge_score import rouge_scorer
+from rouge_score import rouge_scorer, tokenizers
 from scipy.stats import ks_2samp
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Literal
@@ -96,7 +96,7 @@ def truth_ratio(
 
 RougeType = Literal['rouge1', 'rouge2', 'rougeL', 'rougeLsum']
 def rouge_score(predictions: List[str], references: List[str], rouge_type: RougeType = 'rougeL') -> List[float]:
-    rouge = rouge_scorer.RougeScorer([rouge_type], use_stemmer=True)
+    rouge = rouge_scorer.RougeScorer([rouge_type], use_stemmer=True, tokenizer=tokenizers.DefaultTokenizer(True))
     recall = sum(rouge.score(ref, pred)[rouge_type].recall for ref, pred in zip(references, predictions))
     return recall / len(predictions)
 
