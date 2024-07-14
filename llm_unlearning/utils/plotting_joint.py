@@ -99,7 +99,13 @@ def plot_metrics(data_pairs, output_file, log_scale=True, mixed_scale=False):
         retain_checkpoints, retain_values = extract_metrics(retain_data, 'model_utility')
         forget_checkpoints, forget_values = extract_metrics(forget_data, 'ks_test')
 
-        ax1.scatter(retain_values, forget_values, c=[color], marker='o', label=name)
+        checkpoint_indices = list(range(len(retain_checkpoints)))
+        marker_sizes = [40 + 10 * i for i in checkpoint_indices]
+
+        scatter = ax1.scatter(retain_values, forget_values, c=[color], marker='o', 
+                              s=marker_sizes, label=name, alpha=0.7)
+
+        # Connecting lines
         ax1.plot(retain_values, forget_values, c=color, alpha=0.5)
 
     ax1.set_xlabel('Model Utility')
