@@ -1,4 +1,5 @@
 import torch
+import einops
 import torch.nn.functional as F
 
 from typing import Any, Dict, Tuple, List
@@ -108,6 +109,63 @@ class NPO(Method):
 
         return npo_loss, loss_dict, (forget_outputs, reference_outputs)
 
+class RMU(Method):
+    # https://arxiv.org/abs/2403.03218
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.steering_coeff = kwargs.get("steering_coeff", 10.0)
+        self.alpha = kwargs.get("alpha", 100.0)
+        self.layer_id = kwargs.get("layer_id", 5)
+        self.module_str = kwargs.get("module_str", "{model_name}.model.layers[{layer_id}]")
+        self.control_vec = None
+
+    def get_module_activations(self, model: PreTrainedModel, inputs: Dict[str, torch.Tensor]) -> torch.Tensor:
+        activations = []
+
+        def hook_fn(module, input, output):
+            activations.append(output)
+
+        module = eval(self.module_str.format(model_name="model", layer_id=self.layer_id))
+        handle = module.register_forward_hook(hook_fn)
+
+        with torch.set_grad_enabled(model.training):
+            model(**inputs)
+
+        handle.remove()
+        return activations[0][0]
+
+    def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
+        check_inputs(["forget_inputs", "retain_inputs"], **kwargs)
+        reference_model = kwargs.get("reference_model") if "reference_model" in kwargs else None
+        if not reference_model: raise ValueError("RMU requires a config.reference_model to be set")
+
+        forget_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
+        retain_inputs = {k: v for k, v in kwargs['retain_inputs'].items() if k in self.input_keys}
+
+        # Control vector is kept the same throughout unlearning
+        if self.control_vec is None:
+            self.control_vec = torch.rand(1, 1, model.config.hidden_size, dtype=model.dtype, device=model.device)
+            self.control_vec = self.control_vec / torch.norm(self.control_vec) * self.steering_coeff
+
+        forget_activations = self.get_module_activations(model, forget_inputs)
+        control_vec_repeat = einops.repeat(self.control_vec, "1 1 d -> b n d", b=forget_activations.size(0), n=forget_activations.size(1))
+        unlearn_loss = F.mse_loss(forget_activations, control_vec_repeat)
+
+        retain_activations = self.get_module_activations(model, retain_inputs)
+        with torch.no_grad():
+            reference_retain_activations = self.get_module_activations(reference_model, retain_inputs)
+        retain_loss = F.mse_loss(retain_activations, reference_retain_activations)
+        retain_loss *= self.alpha
+
+        total_loss = unlearn_loss + retain_loss
+
+        loss_dict = {
+            "unlearn_loss": unlearn_loss.item(),
+            "retain_loss": retain_loss.item(),
+            "total_loss": total_loss.item(),
+        }
+
+        return total_loss, loss_dict, (forget_activations, retain_activations)
 
 def get_method(method_name: str, **kwargs) -> Method:
     methods = {
@@ -115,6 +173,7 @@ def get_method(method_name: str, **kwargs) -> Method:
         "gradient_descent": GradientDescent,
         "gradient_difference": GradientDifference,
         "npo": NPO,
+        "rmu": RMU,
     }
 
     if method_name not in methods:
