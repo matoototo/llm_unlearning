@@ -29,8 +29,9 @@ unlearning:
     method: "npo"
     kwargs:
         beta: 0.01
+    adversarial_attack: "pgd"
 
-output_dir: ./esults/${unlearning.method}/${dataset.forget.split}_beta_${unlearning.kwargs.beta}
+output_dir: ./results/${unlearning.method}/${dataset.forget.split}_beta_${unlearning.kwargs.beta}_attack_${unlearning.adversarial_attack}
 
 training_arguments:
     output_dir: ${output_dir}

@@ -14,7 +14,11 @@ def check_inputs(required_inputs: List[str], **kwargs):
 
 class Method:
     def __init__(self, **kwargs):
-        self.input_keys = ["input_ids", "attention_mask", "labels"]
+        self.setup(**kwargs)
+        self.input_keys = ["input_ids", "inputs_embeds", "attention_mask", "labels"]
+
+    def setup(self, **kwargs):
+        pass
 
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         raise NotImplementedError("Subclasses must implement this method")

@@ -24,6 +24,8 @@ def main(cfg: DictConfig) -> None:
         data_collator=collate_fn,
         method=cfg.unlearning.method,
         unlearning_kwargs=cfg.unlearning.get("kwargs", {}),
+        adversarial_attack=cfg.unlearning.get("adversarial_attack", None),
+        attack_kwargs=cfg.unlearning.get("attack_kwargs", {}),
     )
 
     trainer.train()
