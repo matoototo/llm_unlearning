@@ -63,9 +63,20 @@ class MixedLogLinearLocator(AutoLocator):
 
     def tick_values(self, vmin, vmax):
         trans = MixedLogLinearTransform(self.threshold)
-        linear_ticks = super().tick_values(trans.transform_non_affine(vmin),
-                                           trans.transform_non_affine(vmax))
-        return trans.inverted().transform_non_affine(linear_ticks)
+        linear_vmin, linear_vmax = trans.transform_non_affine(vmin), trans.transform_non_affine(vmax)
+
+        log_ticks = np.logspace(np.log10(vmin), np.log10(self.threshold), num=5)
+        log_ticks = log_ticks[log_ticks < self.threshold]
+
+        ticks = list(log_ticks) + [self.threshold]
+
+        # Add linear ticks above the threshold
+        if linear_vmax > 1:
+            linear_ticks = np.linspace(1, linear_vmax, num=10)
+            linear_ticks = linear_ticks[linear_ticks > 1]  # Remove any tick at or below 1
+            ticks.extend(trans.inverted().transform_non_affine(linear_ticks))
+
+        return np.array(ticks)
 
 class MixedLogLinearFormatter(ScalarFormatter):
     def __init__(self, threshold):
@@ -85,7 +96,7 @@ def load_json(file_path):
         return json.load(f)
 
 def extract_metrics(data, metric_name):
-    checkpoints = sorted([k for k in data.keys() if k.startswith("checkpoint-")], 
+    checkpoints = sorted([k for k in data.keys() if k.startswith("checkpoint-")],
                          key=lambda x: int(x.split('-')[1]))
     values = [data[checkpoint]['aggregate_metrics'][metric_name] for checkpoint in checkpoints]
     return checkpoints, values
@@ -102,7 +113,7 @@ def plot_metrics(data_pairs, output_file, log_scale=True, mixed_scale=False):
         checkpoint_indices = list(range(len(retain_checkpoints)))
         marker_sizes = [40 + 10 * i for i in checkpoint_indices]
 
-        scatter = ax1.scatter(retain_values, forget_values, c=[color], marker='o', 
+        scatter = ax1.scatter(retain_values, forget_values, c=[color], marker='o',
                               s=marker_sizes, label=name, alpha=0.7)
 
         # Connecting lines
@@ -119,8 +130,11 @@ def plot_metrics(data_pairs, output_file, log_scale=True, mixed_scale=False):
         ax1.text(ax1.get_xlim()[1], 0.09, 'Log', ha='right', va='top', color='red', alpha=0.7)
     elif log_scale:
         ax1.set_yscale('log')
+    else:
+        ax1.set_yscale('linear')
 
-    ax1.axhline(y=-1, color='gray', linestyle='--')
+    if mixed_scale:
+        ax1.axhline(y=-1, color='gray', linestyle='--')
 
     plt.title('Model Utility vs Forget Quality')
     plt.grid(True, linestyle=':', alpha=0.7)
