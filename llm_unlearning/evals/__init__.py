@@ -9,6 +9,7 @@ all_metrics = {
     "rouge_2": lambda config: Rouge(max_length=config.max_length, rouge_type='rouge2'),
     "rouge_l": lambda config: Rouge(max_length=config.max_length, rouge_type='rougeL'),
     "rouge_lsum": lambda config: Rouge(max_length=config.max_length, rouge_type='rougeLsum'),
+    "sampling_rouge_l": lambda config: AdversarialRouge(max_length=config.max_length, rouge_type='rougeL'),
 }
 
 all_aggregate_metrics = {
