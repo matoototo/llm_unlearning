@@ -4,7 +4,7 @@ from typing import Dict, Any
 import torch
 
 from llm_unlearning.unlearning_datasets.tofu import TofuDataset
-from llm_unlearning.evals.tofu_evals import Evaluation, all_metrics, all_aggregate_metrics
+from llm_unlearning.evals import Evaluation, all_metrics, all_aggregate_metrics
 
 class Evaluator:
     def __init__(self, model, tokenizer, config):

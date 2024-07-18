@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from typing import Any, Dict, Tuple, List
 from transformers import PreTrainedModel
-from llm_unlearning.evals.tofu_evals import sequence_nll
+from llm_unlearning.evals.utils import sequence_nll
 
 def check_inputs(required_inputs: List[str], **kwargs):
     missing_inputs = [input_name for input_name in required_inputs if input_name not in kwargs]

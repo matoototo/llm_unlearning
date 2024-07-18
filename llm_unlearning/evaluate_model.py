@@ -6,7 +6,7 @@ import hydra
 from typing import List, Dict, Any, Tuple
 from omegaconf import DictConfig, OmegaConf
 
-from llm_unlearning.evals import Evaluator
+from llm_unlearning.evals.evaluator import Evaluator
 from llm_unlearning.models import load_model_and_tokenizer
 from llm_unlearning.unlearning_datasets import TofuDataset
 

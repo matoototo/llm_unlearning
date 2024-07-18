@@ -18,7 +18,6 @@ class PGDAttack(AdversarialAttack):
         self.num_iterations = kwargs.get('num_iterations', 3)
 
     def attack(self, model: torch.nn.Module, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        # TODO: masking
         input_ids = inputs['forget_inputs']['input_ids']
         attention_mask = inputs['forget_inputs']['attention_mask']
         labels = inputs['forget_inputs']['labels']
