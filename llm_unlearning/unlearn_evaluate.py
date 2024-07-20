@@ -1,15 +1,23 @@
 import hydra
 import os
+import gc
 import glob
+import torch
 from omegaconf import DictConfig, OmegaConf
 
 from llm_unlearning.unlearn import main as unlearn_main
 from llm_unlearning.evaluate_model import main as evaluate_main
 
+def flush_cache() -> None:
+    gc.collect()
+    torch.cuda.empty_cache()
+
 def run_unlearn(cfg: DictConfig) -> str:
     print("\nStarting Unlearning Process:")
     unlearn_main(cfg)
     output_dir = cfg.training_arguments.output_dir
+
+    flush_cache()
     return output_dir
 
 def run_finetune(cfg: DictConfig) -> str:
@@ -21,11 +29,14 @@ def run_finetune(cfg: DictConfig) -> str:
     if not checkpoints:
         raise ValueError(f"No checkpoints found in {output_dir}")
     last_checkpoint = max(checkpoints, key=os.path.getctime)
+
+    flush_cache()
     return last_checkpoint
 
 def run_evaluate(cfg: DictConfig) -> None:
     print("\nStarting Evaluation Process:")
     evaluate_main(cfg)
+    flush_cache()
 
 @hydra.main(config_path="configs", config_name="unlearn", version_base=None)
 def main(cfg: DictConfig) -> None:
