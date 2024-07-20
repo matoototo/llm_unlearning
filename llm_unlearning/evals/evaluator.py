@@ -16,6 +16,7 @@ class Evaluator:
         self.model.eval()
 
         self.metrics = {}
+        self.batch_size_factors = config.get("batch_size_factors", {})
         for metric in self.config.metrics:
             if metric not in all_metrics:
                 print(f"Warning: Metric '{metric}' not recognized and will be skipped.")
@@ -29,10 +30,11 @@ class Evaluator:
                 continue
             self.aggregate_metrics[metric] = all_aggregate_metrics[metric](self.config)
 
-    def _get_dataloader(self, dataset: TofuDataset) -> DataLoader:
+    def _get_dataloader(self, dataset: TofuDataset, batch_size_factor: float = 1.0) -> DataLoader:
+        adjusted_batch_size = max(1, int(self.config.batch_size * batch_size_factor))
         return DataLoader(
             dataset,
-            batch_size=self.config.batch_size,
+            batch_size=adjusted_batch_size,
             shuffle=False,
             collate_fn=dataset.collate_fn
         )
@@ -48,7 +50,8 @@ class Evaluator:
         return {k: move_to_device(v) for k, v in batch.items()}
 
     def _compute_metric(self, dataset: TofuDataset, eval: Evaluation, desc: str) -> Dict[str, float]:
-        dataloader = self._get_dataloader(dataset)
+        batch_size_factor = self.batch_size_factors.get(desc.lower(), 1.0)
+        dataloader = self._get_dataloader(dataset, batch_size_factor)
         perturb_probability = dataset.config.perturb_probability
         total_metric = 0.0
         total_samples = 0

@@ -21,8 +21,8 @@ model:
   retain_tokenizer_path: "/path/to/retain_model"
   fp16: true
 
-batch_size: 8
-max_length: 512
+batch_size: 256
+max_length: 200
 
 evaluation_groups:
   - name: "forget_evaluation"
@@ -33,6 +33,8 @@ evaluation_groups:
         split: "forget01_perturbed"
     metrics:
       - truth_ratio
+    batch_size_factors:
+      truth_ratio: 0.25
     aggregate_metrics:
       - ks_test
     save_results_path: "./forget_results.json"
@@ -59,6 +61,8 @@ evaluation_groups:
       - truth_ratio
       - probability
       - rouge_l
+    batch_size_factors:
+      truth_ratio: 0.25
     aggregate_metrics:
       - model_utility
     save_results_path: "./retain_results.json"

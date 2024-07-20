@@ -169,6 +169,7 @@ A list of evaluation groups, each containing:
 - `name`: Name of the evaluation group
 - `datasets`: The datasets to be used in this evaluation group (see below)
 - `metrics`: A list of metrics to be used for evaluation. Available metrics are found in `llm_unlearning/evals/tofu_evals.py`. Specified in order of evaluation.
+- `batch_size_factors`: A map of metric names to their batch size factors (defaulting to 1 if not specified). Used to scale batch sizes for different metrics. Currently the primary use case is to lower the truth_ratio batch size since it's memory-intensive
 - `aggregate_metrics`: A list of aggregate metrics (e.g., KS-test)
 - `save_results_path`: The file path where the results for this group will be saved (JSON format)
 
