@@ -94,8 +94,8 @@ def truth_ratio(
 RougeType = Literal['rouge1', 'rouge2', 'rougeL', 'rougeLsum']
 def rouge_score(predictions: List[str], references: List[str], rouge_type: RougeType = 'rougeL') -> float:
     rouge = rouge_scorer.RougeScorer([rouge_type], use_stemmer=True, tokenizer=tokenizers.DefaultTokenizer(True))
-    recall = sum(rouge.score(ref, pred)[rouge_type].recall for ref, pred in zip(references, predictions))
-    return recall / len(predictions)
+    recall = [rouge.score(ref, pred)[rouge_type].recall for ref, pred in zip(references, predictions)]
+    return recall
 
 def extract_question_tokens(batch: Dict[str, torch.Tensor], pad_token_id: int) -> tuple[torch.Tensor, torch.Tensor]:
     """

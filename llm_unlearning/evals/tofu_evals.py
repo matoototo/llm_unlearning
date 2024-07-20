@@ -107,6 +107,5 @@ class Rouge(Evaluation):
         decoded_outputs = [output[8:] for output in decoded_outputs]
         decoded_labels = [label[8:] for label in decoded_labels]
 
-        # Returns average but that's fine, we average later anyway
         rouge_score_value = rouge_score(decoded_outputs, decoded_labels, self.rouge_type)
-        return torch.tensor(rouge_score_value, device=model.device).unsqueeze(0)
+        return torch.tensor(rouge_score_value, device=model.device)
