@@ -14,7 +14,10 @@ class UnlearningTrainer(Trainer):
         self.loss_component_counts: Dict[str, int] = {}
         self.method = get_method(method, **unlearning_kwargs)
         self.attack = get_attack(at_attack, **attack_kwargs) if at_attack else None
-        self.reference_model = self.reference_model.to(self.args.device) if self.reference_model else None
+
+        if self.reference_model:
+            self.reference_model.to(self.args.device)
+            self.reference_model.eval()
 
     def compute_loss(self, model, inputs, return_outputs=False):
         if self.attack: inputs = self.attack.attack(model, inputs)

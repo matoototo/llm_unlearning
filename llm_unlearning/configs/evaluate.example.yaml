@@ -21,7 +21,7 @@ model:
   retain_tokenizer_path: "/path/to/retain_model"
   fp16: true
 
-batch_size: 256
+batch_size: 128
 max_length: 200
 
 evaluation_groups:

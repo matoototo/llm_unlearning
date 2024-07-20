@@ -8,13 +8,12 @@ from llm_unlearning.evals import Evaluation, all_metrics, all_aggregate_metrics
 
 class Evaluator:
     def __init__(self, model, tokenizer, config):
-        self.model = model
-        self.tokenizer = tokenizer
         self.config = config
+        self.tokenizer = tokenizer
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model.to(self.device)
-        self.model.eval()
-
+        self.model = model
+        if model: self.model.to(self.device)
+        if model: self.model.eval()
         self.metrics = {}
         self.batch_size_factors = config.get("batch_size_factors", {})
         for metric in self.config.metrics:
