@@ -189,7 +189,36 @@ The maximum length for generation during evaluation (only relevant for ROUGE).
 
 ## Plotting
 
-The evaluation results can be plotted using `llm_unlearning.utils.plotting`. More information is given by invoking:
+Evaluation results can be plotted using `llm_unlearning.utils.plotting` or `llm_unlearning.utils.plotting_joint`.
+
+The former is for plotting a single evaluation file (such as retain_results.json), and it plots all metrics broken down per dataset and checkpoint. More information can be found by running:
 ```bash
 python -m llm_unlearning.utils.plotting --help
+```
+
+The latter plots model utility (x-axis) vs forget quality (y-axis) for multiple evaluation files. It operates on a folder of evaluation files, and assumes the following structure:
+```
+input_folder/
+├── agg_run_1_name/     # Has runs to aggregate (e.g., different seeds)
+│   ├── arbitrary_name/ # Contains retain/forget pair for a single run
+│   │   ├── retain_results.json
+│   │   └── forget_results.json
+│   ├── arbitrary_name_2/
+│   │   ├── retain_results.json
+│   │   └── forget_results.json
+│   └── ...
+├── agg_run_2_name/
+│   ├── arbitrary_name_3/
+│   │   ├── retain_results.json
+│   │   └── forget_results.json
+│   └── ...
+├── # Single runs are prefixed with their name
+├── run_3_name_retain_results.json
+├── run_3_name_forget_results.json
+├── run_4_name_retain_results.json
+└── run_4_name_forget_results.json
+```
+More information:
+```bash
+python -m llm_unlearning.utils.plotting_joint --help
 ```
