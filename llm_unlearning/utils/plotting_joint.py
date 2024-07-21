@@ -1,12 +1,13 @@
-import argparse
-import json
-import matplotlib.pyplot as plt
-import numpy as np
 import os
+import json
+import argparse
+import numpy as np
+import matplotlib.pyplot as plt
+
 from glob import glob
-from matplotlib.scale import ScaleBase, register_scale
 from matplotlib.transforms import Transform
-from matplotlib.ticker import AutoLocator, ScalarFormatter, FuncFormatter
+from matplotlib.scale import ScaleBase, register_scale
+from matplotlib.ticker import AutoLocator, ScalarFormatter
 
 class MixedLogLinearScale(ScaleBase):
     name = 'mixedloglinear'
@@ -70,10 +71,9 @@ class MixedLogLinearLocator(AutoLocator):
 
         ticks = list(log_ticks) + [self.threshold]
 
-        # Add linear ticks above the threshold
         if linear_vmax > 1:
             linear_ticks = np.linspace(1, linear_vmax, num=10)
-            linear_ticks = linear_ticks[linear_ticks > 1]  # Remove any tick at or below 1
+            linear_ticks = linear_ticks[linear_ticks > 1]
             ticks.extend(trans.inverted().transform_non_affine(linear_ticks))
 
         return np.array(ticks)
@@ -101,17 +101,94 @@ def extract_metrics(data, metric_name):
     values = [data[checkpoint]['aggregate_metrics'][metric_name] for checkpoint in checkpoints]
     return checkpoints, values
 
+def process_run_folder(folder_path):
+    retain_file = os.path.join(folder_path, 'retain_results.json')
+    forget_file = os.path.join(folder_path, 'forget_results.json')
+
+    if os.path.exists(retain_file) and os.path.exists(forget_file):
+        retain_data = load_json(retain_file)
+        forget_data = load_json(forget_file)
+        return retain_data, forget_data
+    else:
+        print(f"Warning: Missing retain or forget file in {folder_path}")
+        return None, None
+
+def aggregate_results(results):
+    if not results:
+        return None, None, None, None
+
+    retain_values = [r[0] for r in results if r[0] is not None]
+    forget_values = [r[1] for r in results if r[1] is not None]
+
+    if not retain_values or not forget_values:
+        return None, None, None, None
+
+    model_utility = [extract_metrics(r, 'model_utility')[1] for r in retain_values]
+    forget_quality = [extract_metrics(r, 'ks_test')[1] for r in forget_values]
+
+    model_utility_mean = np.mean(model_utility, axis=0)
+    forget_quality_mean = np.mean(forget_quality, axis=0)
+
+    model_utility_std = np.std(model_utility, axis=0)
+    forget_quality_std = np.std(forget_quality, axis=0)
+
+    return model_utility_mean, forget_quality_mean, model_utility_std, forget_quality_std
+
+def process_folder(folder_path):
+    data_pairs = []
+
+    # Process folders (aggregated data)
+    for item in os.listdir(folder_path):
+        item_path = os.path.join(folder_path, item)
+        if os.path.isdir(item_path):
+            run_folders = [f for f in os.listdir(item_path) if os.path.isdir(os.path.join(item_path, f))]
+            if run_folders:
+                results = [process_run_folder(os.path.join(item_path, run)) for run in run_folders]
+                retain_agg, forget_agg, retain_std, forget_std = aggregate_results(results)
+                if retain_agg is not None:
+                    data_pairs.append((item, retain_agg, forget_agg, retain_std, forget_std))
+            else:
+                retain_data, forget_data = process_run_folder(item_path)
+                if retain_data is not None and forget_data is not None:
+                    data_pairs.append((item, retain_data, forget_data, None, None))
+
+    # Process single file pairs in the upper folder
+    retain_files = glob(os.path.join(folder_path, '*_retain_results.json'))
+    for retain_file in retain_files:
+        name = os.path.basename(retain_file).replace('_retain_results.json', '')
+        forget_file = retain_file.replace('_retain_results.json', '_forget_results.json')
+
+        if os.path.exists(forget_file):
+            retain_data = load_json(retain_file)
+            forget_data = load_json(forget_file)
+            data_pairs.append((name, retain_data, forget_data, None, None))
+        else:
+            print(f"Warning: No matching forget file found for {retain_file}")
+
+    return data_pairs
+
 def plot_metrics(data_pairs, output_file, log_scale=True, mixed_scale=False):
     fig, ax1 = plt.subplots(figsize=(12, 8))
 
     colors = plt.cm.rainbow(np.linspace(0, 1, len(data_pairs)))
 
-    for (name, retain_data, forget_data), color in zip(data_pairs, colors):
-        retain_checkpoints, retain_values = extract_metrics(retain_data, 'model_utility')
-        forget_checkpoints, forget_values = extract_metrics(forget_data, 'ks_test')
+    for (name, retain_data, forget_data, retain_std, forget_std), color in zip(data_pairs, colors):
+        if isinstance(retain_data, np.ndarray):  # Aggregated data
+            retain_values = retain_data
+            forget_values = forget_data
+            checkpoint_indices = list(range(len(retain_values)))
+        else:
+            retain_checkpoints, retain_values = extract_metrics(retain_data, 'model_utility')
+            _, forget_values = extract_metrics(forget_data, 'ks_test')
+            checkpoint_indices = list(range(len(retain_checkpoints)))
 
-        checkpoint_indices = list(range(len(retain_checkpoints)))
         marker_sizes = [40 + 10 * i for i in checkpoint_indices]
+
+        if retain_std is not None and forget_std is not None:
+            ax1.fill_between(retain_values,
+                             np.array(forget_values) - forget_std,
+                             np.array(forget_values) + forget_std,
+                             color=color, alpha=0.2)
 
         scatter = ax1.scatter(retain_values, forget_values, c=[color], marker='o',
                               s=marker_sizes, label=name, alpha=0.7)
@@ -143,31 +220,6 @@ def plot_metrics(data_pairs, output_file, log_scale=True, mixed_scale=False):
     plt.tight_layout()
     plt.savefig(output_file)
     plt.close()
-
-def process_folder(folder_path):
-    data_pairs = []
-
-    retain_files = glob(os.path.join(folder_path, '*_retain_results.json'))
-    for retain_file in retain_files:
-        name = os.path.basename(retain_file).replace('_retain_results.json', '')
-        forget_file = retain_file.replace('_retain_results.json', '_forget_results.json')
-
-        if os.path.exists(forget_file):
-            retain_data = load_json(retain_file)
-            forget_data = load_json(forget_file)
-            data_pairs.append((name, retain_data, forget_data))
-        else:
-            print(f"Warning: No matching forget file found for {retain_file}")
-
-    retain_file = os.path.join(folder_path, 'retain_results.json')
-    forget_file = os.path.join(folder_path, 'forget_results.json')
-    if os.path.exists(retain_file) and os.path.exists(forget_file):
-        retain_data = load_json(retain_file)
-        forget_data = load_json(forget_file)
-        name = os.path.basename(folder_path)  # Use folder name as the dataset name
-        data_pairs.append((name, retain_data, forget_data))
-
-    return data_pairs
 
 def main():
     parser = argparse.ArgumentParser()
