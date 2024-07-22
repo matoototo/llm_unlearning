@@ -13,7 +13,6 @@ from llm_unlearning.evals.utils import (
     rouge_score,
     harmonic_mean,
     extract_answer_tokens,
-    calculate_rouge_scores,
     extract_question_tokens,
 )
 

@@ -46,3 +46,8 @@ class UnlearningTrainer(Trainer):
         self.loss_component_counts = {}
 
         return super().log(logs)
+
+    def training_step(self, model, inputs):
+        if hasattr(self.train_dataset, 'set_epoch'):
+            self.train_dataset.set_epoch(self.state.epoch)
+        return super().training_step(model, inputs)

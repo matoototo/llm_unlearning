@@ -1,4 +1,5 @@
 from .tofu import *
+from .augment import *
 
 from omegaconf import DictConfig
 from transformers import PreTrainedTokenizer
