@@ -1,8 +1,11 @@
+import os
 import torch
 import einops
+import pickle
+import hashlib
 
 from torch.utils.data import Dataset
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
 from llm_unlearning.evals.utils import extract_answer_tokens, extract_question_tokens
@@ -15,7 +18,8 @@ class AugmentGenerated(Dataset):
         tokenizer: PreTrainedTokenizer,
         max_length: int = 200,
         num_generated: int = 4,
-        every_n_epochs: int = 4
+        every_n_epochs: int = 4,
+        cache_dir: Optional[str] = None,
     ):
         self.dataset = dataset
         self.model = model
@@ -24,7 +28,29 @@ class AugmentGenerated(Dataset):
         self.num_generated = num_generated
         self.every_n_epochs = every_n_epochs
         self.current_epoch = 0
-        self.cache = {}
+
+        self.cache_dir = cache_dir
+        if self.cache_dir: os.makedirs(self.cache_dir, exist_ok=True)
+        self.cache_id = self._generate_cache_id()
+        self.cache_file = os.path.join(self.cache_dir, f"cache_{self.cache_id}.pkl") if self.cache_dir else None
+        self.cache = self._load_cache()
+
+    def _generate_cache_id(self):
+        model_name = self.model.config._name_or_path
+        dataset_name = getattr(self.dataset, 'name', str(self.dataset))
+        unique_string = f"{model_name}_{dataset_name}_{self.max_length}_{self.num_generated}_{self.every_n_epochs}"
+        return hashlib.md5(unique_string.encode()).hexdigest()
+
+    def _load_cache(self):
+        if self.cache_file and os.path.exists(self.cache_file):
+            with open(self.cache_file, 'rb') as f:
+                return pickle.load(f)
+        return {}
+
+    def _save_cache(self):
+        if not self.cache_file: return
+        with open(self.cache_file, 'wb') as f:
+            pickle.dump(self.cache, f)
 
     def __len__(self):
         return len(self.dataset)
@@ -32,12 +58,15 @@ class AugmentGenerated(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         item = self.dataset[idx]
         forget_inputs = item['forget_inputs']
+        pseudo_epoch = self.current_epoch // self.every_n_epochs
 
-        if idx not in self.cache or self.current_epoch % self.every_n_epochs == 0:
+        if idx not in self.cache: self.cache[idx] = {}
+        if pseudo_epoch not in self.cache[idx]:
             generated_outputs = self._generate_continuations(forget_inputs)
-            self.cache[idx] = generated_outputs
+            self.cache[idx][pseudo_epoch] = generated_outputs
+            self._save_cache()
         else:
-            generated_outputs = self.cache[idx]
+            generated_outputs = self.cache[idx][pseudo_epoch]
 
         padded_outputs, padding_masks = self._pad_outputs(generated_outputs)
 
