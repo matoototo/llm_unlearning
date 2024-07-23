@@ -42,7 +42,7 @@ class AdversarialRouge(Evaluation):
                 do_sample=True,
                 top_k=50,
                 top_p=0.95,
-                temperature=0.7,
+                temperature=1.0,
             )
 
             extracted_outputs = extract_answer_tokens(outputs, question_length, pad_token_id)
