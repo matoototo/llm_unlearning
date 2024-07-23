@@ -37,8 +37,8 @@ class AugmentGenerated(Dataset):
 
     def _generate_cache_id(self):
         model_name = self.model.config._name_or_path
-        dataset_name = getattr(self.dataset, 'name', str(self.dataset))
-        unique_string = f"{model_name}_{dataset_name}_{self.max_length}_{self.num_generated}_{self.every_n_epochs}"
+        dataset_split = self.dataset.forget_dataset.split
+        unique_string = f"{model_name}_{dataset_split}_{self.max_length}_{self.num_generated}_{self.every_n_epochs}"
         return hashlib.md5(unique_string.encode()).hexdigest()
 
     def _load_cache(self):
