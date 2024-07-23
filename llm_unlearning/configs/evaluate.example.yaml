@@ -23,6 +23,7 @@ model:
 
 batch_size: 128
 max_length: 200
+delete_after_eval: false
 
 evaluation_groups:
   - name: "forget_evaluation"

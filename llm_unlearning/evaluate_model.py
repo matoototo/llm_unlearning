@@ -3,6 +3,7 @@ import re
 import json
 import hydra
 import torch
+import shutil
 
 from typing import List, Dict, Any, Tuple
 from omegaconf import DictConfig, OmegaConf
@@ -74,6 +75,14 @@ def evaluate_checkpoint(model: Any, tokenizer: Any, evaluation_groups: List[Dict
 
     return checkpoint_results
 
+def delete_checkpoint(checkpoint_path: str):
+    """Delete the checkpoint directory."""
+    if os.path.exists(checkpoint_path):
+        shutil.rmtree(checkpoint_path)
+        print(f"Deleted checkpoint: {checkpoint_path}")
+    else:
+        print(f"Checkpoint not found: {checkpoint_path}")
+
 @hydra.main(config_path="configs", config_name="evaluate", version_base=None)
 def main(cfg: DictConfig) -> None:
     print(OmegaConf.to_yaml(cfg))
@@ -91,6 +100,9 @@ def main(cfg: DictConfig) -> None:
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+        if cfg.get('delete_after_eval', False) and checkpoint_name not in ["checkpoint-0", "retain"]:
+            delete_checkpoint(checkpoint_path)
 
     retain_results = all_results.get("retain", {})
     for checkpoint_name, checkpoint_results in all_results.items():
