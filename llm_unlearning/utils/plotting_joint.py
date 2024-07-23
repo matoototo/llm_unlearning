@@ -3,6 +3,7 @@ import json
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy import stats
 
 from glob import glob
 from matplotlib.transforms import Transform
@@ -113,7 +114,7 @@ def process_run_folder(folder_path):
         print(f"Warning: Missing retain or forget file in {folder_path}")
         return None, None
 
-def aggregate_results(results):
+def aggregate_results(results, confidence):
     if not results:
         return None, None, None, None
 
@@ -129,12 +130,19 @@ def aggregate_results(results):
     model_utility_mean = np.mean(model_utility, axis=0)
     forget_quality_mean = np.mean(forget_quality, axis=0)
 
-    model_utility_std = np.std(model_utility, axis=0)
-    forget_quality_std = np.std(forget_quality, axis=0)
+    n = len(model_utility)
+    df = n - 1
+    t_value = stats.t.ppf((1 + confidence) / 2, df)
 
-    return model_utility_mean, forget_quality_mean, model_utility_std, forget_quality_std
+    model_utility_se = stats.sem(model_utility, axis=0)
+    forget_quality_se = stats.sem(forget_quality, axis=0)
 
-def process_folder(folder_path):
+    model_utility_ci = t_value * model_utility_se
+    forget_quality_ci = t_value * forget_quality_se
+
+    return model_utility_mean, forget_quality_mean, model_utility_ci, forget_quality_ci
+
+def process_folder(folder_path, confidence):
     data_pairs = []
 
     # Process folders (aggregated data)
@@ -144,9 +152,9 @@ def process_folder(folder_path):
             run_folders = [f for f in os.listdir(item_path) if os.path.isdir(os.path.join(item_path, f))]
             if run_folders:
                 results = [process_run_folder(os.path.join(item_path, run)) for run in run_folders]
-                retain_agg, forget_agg, retain_std, forget_std = aggregate_results(results)
+                retain_agg, forget_agg, retain_ci, forget_ci = aggregate_results(results, confidence)
                 if retain_agg is not None:
-                    data_pairs.append((item, retain_agg, forget_agg, retain_std, forget_std))
+                    data_pairs.append((item, retain_agg, forget_agg, retain_ci, forget_ci))
             else:
                 retain_data, forget_data = process_run_folder(item_path)
                 if retain_data is not None and forget_data is not None:
@@ -167,12 +175,12 @@ def process_folder(folder_path):
 
     return data_pairs
 
-def plot_metrics(data_pairs, output_file, log_scale=True, mixed_scale=False):
+def plot_metrics(data_pairs, output_file, log_scale=True, mixed_scale=False, ci_mode='y'):
     fig, ax1 = plt.subplots(figsize=(12, 8))
 
     colors = plt.cm.rainbow(np.linspace(0, 1, len(data_pairs)))
 
-    for (name, retain_data, forget_data, retain_std, forget_std), color in zip(data_pairs, colors):
+    for (name, retain_data, forget_data, retain_ci, forget_ci), color in zip(data_pairs, colors):
         if isinstance(retain_data, np.ndarray):  # Aggregated data
             retain_values = retain_data
             forget_values = forget_data
@@ -184,11 +192,17 @@ def plot_metrics(data_pairs, output_file, log_scale=True, mixed_scale=False):
 
         marker_sizes = [40 + 10 * i for i in checkpoint_indices]
 
-        if retain_std is not None and forget_std is not None:
-            ax1.fill_between(retain_values,
-                             np.array(forget_values) - forget_std,
-                             np.array(forget_values) + forget_std,
-                             color=color, alpha=0.2)
+        if retain_ci is not None and forget_ci is not None:
+            if ci_mode == 'y':
+                ax1.fill_between(retain_values,
+                                 forget_values - forget_ci,
+                                 forget_values + forget_ci,
+                                 color=color, alpha=0.2)
+            elif ci_mode == 'x':
+                ax1.fill_betweenx(forget_values,
+                                  retain_values - retain_ci,
+                                  retain_values + retain_ci,
+                                  color=color, alpha=0.2)
 
         scatter = ax1.scatter(retain_values, forget_values, c=[color], marker='o',
                               s=marker_sizes, label=name, alpha=0.7)
@@ -227,17 +241,19 @@ def main():
     parser.add_argument('output_file', type=str, help='Path to save the output plot')
     parser.add_argument('--linear', action='store_true', help='Use linear scale for forget quality')
     parser.add_argument('--mixed', action='store_true', help='Use mixed log-linear scale for FQ (log until 0.1, linear above)')
+    parser.add_argument('--confidence', type=float, default=0.95, help='Confidence level for the interval (default: 0.95)')
+    parser.add_argument('--ci-mode', choices=['x', 'y'], default='y', help='Axis for confidence interval (x or y, default: y)')
     args = parser.parse_args()
 
     if not os.path.isdir(args.input_folder):
         raise ValueError("Input must be a folder containing retain and forget JSON files")
 
-    data_pairs = process_folder(args.input_folder)
+    data_pairs = process_folder(args.input_folder, args.confidence)
 
     if not data_pairs:
         raise ValueError("No valid pairs of retain and forget files found in the input folder")
 
-    plot_metrics(data_pairs, args.output_file, log_scale=not args.linear, mixed_scale=args.mixed)
+    plot_metrics(data_pairs, args.output_file, log_scale=not args.linear, mixed_scale=args.mixed, ci_mode=args.ci_mode)
     print(f"Plot saved to {args.output_file}")
 
 if __name__ == "__main__":
