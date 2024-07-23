@@ -118,14 +118,16 @@ def aggregate_results(results, confidence):
     forget_values = [r[1] for r in results if r[1] is not None]
 
     if not retain_values and not forget_values:
-        return None, None, None, None
+        return None, None, None, None, 0, 0
 
     model_utility = [extract_metrics(r, 'model_utility')[1] for r in retain_values] if retain_values else None
     forget_quality = [extract_metrics(r, 'ks_test')[1] for r in forget_values] if forget_values else None
 
+    n_retain = len(model_utility) if model_utility else 0
+    n_forget = len(forget_quality) if forget_quality else 0
+
     if model_utility:
         model_utility_mean = np.mean(model_utility, axis=0)
-        n_retain = len(model_utility)
         model_utility_se = stats.sem(model_utility, axis=0)
         t_value_retain = stats.t.ppf((1 + confidence) / 2, n_retain - 1)
         model_utility_ci = t_value_retain * model_utility_se
@@ -134,15 +136,13 @@ def aggregate_results(results, confidence):
 
     if forget_quality:
         forget_quality_mean = np.mean(forget_quality, axis=0)
-        n_forget = len(forget_quality)
         forget_quality_se = stats.sem(forget_quality, axis=0)
         t_value_forget = stats.t.ppf((1 + confidence) / 2, n_forget - 1)
         forget_quality_ci = t_value_forget * forget_quality_se
     else:
         forget_quality_mean = forget_quality_ci = None
 
-    print("Sample sizes: retain =", n_retain," forget =", n_forget)
-    return model_utility_mean, forget_quality_mean, model_utility_ci, forget_quality_ci
+    return model_utility_mean, forget_quality_mean, model_utility_ci, forget_quality_ci, n_retain, n_forget
 
 def process_folder(folder_path, confidence):
     data_pairs = []
@@ -154,13 +154,13 @@ def process_folder(folder_path, confidence):
             run_folders = [f for f in os.listdir(item_path) if os.path.isdir(os.path.join(item_path, f))]
             if run_folders:
                 results = [process_run_folder(os.path.join(item_path, run)) for run in run_folders]
-                retain_agg, forget_agg, retain_ci, forget_ci = aggregate_results(results, confidence)
+                retain_agg, forget_agg, retain_ci, forget_ci, n_retain, n_forget = aggregate_results(results, confidence)
                 if retain_agg is not None or forget_agg is not None:
-                    data_pairs.append((item, retain_agg, forget_agg, retain_ci, forget_ci))
+                    data_pairs.append((item, retain_agg, forget_agg, retain_ci, forget_ci, n_retain, n_forget))
             else:
                 retain_data, forget_data = process_run_folder(item_path)
                 if retain_data is not None or forget_data is not None:
-                    data_pairs.append((item, retain_data, forget_data, None, None))
+                    data_pairs.append((item, retain_data, forget_data, None, None, 1, 1))
 
     # Process single file pairs in the upper folder
     retain_files = glob(os.path.join(folder_path, '*_retain_results.json'))
@@ -176,7 +176,7 @@ def process_folder(folder_path, confidence):
 
         if retain_data is not None or forget_data is not None:
             name = os.path.basename(base_name)
-            data_pairs.append((name, retain_data, forget_data, None, None))
+            data_pairs.append((name, retain_data, forget_data, None, None, 1 if retain_data else 0, 1 if forget_data else 0))
 
     return data_pairs
 
@@ -185,7 +185,7 @@ def plot_metrics(data_pairs, output_file, log_scale=True, mixed_scale=False, ci_
 
     colors = plt.cm.rainbow(np.linspace(0, 1, len(data_pairs)))
 
-    for (name, retain_data, forget_data, retain_ci, forget_ci), color in zip(data_pairs, colors):
+    for (name, retain_data, forget_data, retain_ci, forget_ci, n_retain, n_forget), color in zip(data_pairs, colors):
         if isinstance(retain_data, np.ndarray) or isinstance(forget_data, np.ndarray):  # Aggregated data
             retain_values = retain_data if retain_data is not None else []
             forget_values = forget_data if forget_data is not None else []
@@ -196,6 +196,8 @@ def plot_metrics(data_pairs, output_file, log_scale=True, mixed_scale=False, ci_
             checkpoint_indices = list(range(max(len(retain_values), len(forget_values))))
 
         marker_sizes = [40 + 10 * i for i in checkpoint_indices]
+
+        legend_name = f"{name} (r:{n_retain}, f:{n_forget})"
 
         if retain_ci is not None and forget_ci is not None:
             if ci_mode == 'y' and len(forget_values) > 0:
@@ -211,13 +213,13 @@ def plot_metrics(data_pairs, output_file, log_scale=True, mixed_scale=False, ci_
 
         if len(retain_values) > 0 and len(forget_values) > 0:
             scatter = ax1.scatter(retain_values, forget_values, c=[color], marker='o',
-                                  s=marker_sizes, label=name, alpha=0.7)
+                                  s=marker_sizes, label=legend_name, alpha=0.7)
             # Connecting lines
             ax1.plot(retain_values, forget_values, c=color, alpha=0.5)
         elif len(retain_values) > 0:
-            ax1.axvline(x=np.mean(retain_values), color=color, linestyle='--', label=f"{name} (Retain Only)")
+            ax1.axvline(x=np.mean(retain_values), color=color, linestyle='--', label=f"{legend_name} (Retain Only)")
         elif len(forget_values) > 0:
-            ax1.axhline(y=np.mean(forget_values), color=color, linestyle='--', label=f"{name} (Forget Only)")
+            ax1.axhline(y=np.mean(forget_values), color=color, linestyle='--', label=f"{legend_name} (Forget Only)")
 
     ax1.set_xlabel('Model Utility')
     ax1.set_ylabel('Forget Quality (ks_test)', color='black')
