@@ -23,6 +23,12 @@ class Method:
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         raise NotImplementedError("Subclasses must implement this method")
 
+    def prehook(self, trainer, model, inputs):
+        pass
+
+    def posthook(self, trainer, model, inputs, loss):
+        pass
+
 class GradientDescent(Method):
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs"], **kwargs)
@@ -118,6 +124,29 @@ class RMU(Method):
         self.layer_id = kwargs.get("layer_id", 5)
         self.module_str = kwargs.get("module_str", "{model_name}.model.layers[{layer_id}]")
         self.control_vec = None
+        self.frozen_layers = []
+
+    def freeze_layers(self, model: PreTrainedModel):
+        target_layer = self.layer_id
+        layers_to_update = [target_layer - 2, target_layer - 1, target_layer]
+        for name, param in model.named_parameters():
+            if not any(f"layers.{layer}.mlp" in name for layer in layers_to_update):
+                param.requires_grad = False
+                self.frozen_layers.append(name)
+            else:
+                param.requires_grad = True
+
+    def unfreeze_layers(self, model: PreTrainedModel):
+        for name, param in model.named_parameters():
+            if name in self.frozen_layers:
+                param.requires_grad = True
+        self.frozen_layers = []
+
+    def prehook(self, trainer, model, inputs):
+        self.freeze_layers(model)
+
+    def posthook(self, trainer, model, inputs, loss):
+        self.unfreeze_layers(model)
 
     def get_module_activations(self, model: PreTrainedModel, inputs: Dict[str, torch.Tensor]) -> torch.Tensor:
         activations = []

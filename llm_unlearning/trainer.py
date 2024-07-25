@@ -1,5 +1,5 @@
-from typing import Dict
 from transformers import Trainer
+from typing import Callable, List, Dict
 from llm_unlearning.methods import get_method, get_attack
 
 class UnlearningTrainer(Trainer):
@@ -19,8 +19,15 @@ class UnlearningTrainer(Trainer):
             self.reference_model.to(self.args.device)
             self.reference_model.eval()
 
+        self.prehooks: List[Callable] = []
+        self.posthooks: List[Callable] = []
+
+        self.prehooks.append(self.method.prehook)
+        self.posthooks.append(self.method.posthook)
+
     def compute_loss(self, model, inputs, return_outputs=False):
-        if self.attack: inputs = self.attack.attack(model, inputs)
+        if self.attack:
+            inputs = self.attack.attack(model, inputs)
 
         loss, loss_dict, outputs = self.method.compute_loss(model, **inputs, reference_model=self.reference_model)
 
@@ -48,6 +55,15 @@ class UnlearningTrainer(Trainer):
         return super().log(logs)
 
     def training_step(self, model, inputs):
+        for prehook in self.prehooks:
+            prehook(self, model, inputs)
+
         if hasattr(self.train_dataset, 'set_epoch'):
             self.train_dataset.set_epoch(self.state.epoch)
-        return super().training_step(model, inputs)
+
+        out = super().training_step(model, inputs)
+
+        for posthook in self.posthooks:
+            posthook(self, model, inputs, out)
+
+        return out
