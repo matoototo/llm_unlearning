@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import argparse
 import numpy as np
@@ -180,8 +181,12 @@ def process_folder(folder_path, confidence):
 
     return data_pairs
 
-def plot_metrics(data_pairs, output_file, log_scale=True, mixed_scale=False, ci_mode='y', top_k=None):
+def plot_metrics(data_pairs, output_file, log_scale=True, mixed_scale=False, ci_mode='y', top_k=None, filter_str=None):
     fig, ax1 = plt.subplots(figsize=(12, 8))
+
+    # Filter data_pairs based on filter_str if specified
+    if filter_str is not None:
+        data_pairs = [dp for dp in data_pairs if re.search(f"{filter_str}", dp[0])]
 
     # Sort data_pairs based on peak forget quality if top_k is specified
     if top_k is not None:
@@ -261,6 +266,7 @@ def main():
     parser.add_argument('--ci-mode', choices=['x', 'y'], default='y', help='Axis for confidence interval (x or y, default: y)')
     parser.add_argument('--no-confidence', action='store_true', help='Disable confidence intervals')
     parser.add_argument('--top_k', type=int, help='Only display results of the top k runs, based on peak forget quality')
+    parser.add_argument('--filter-regex', type=str, help='Only plot results that match this regex in their name')
     args = parser.parse_args()
 
     if not os.path.isdir(args.input_folder):
@@ -272,7 +278,8 @@ def main():
     if not data_pairs:
         raise ValueError("No valid pairs of retain and forget files found in the input folder")
 
-    plot_metrics(data_pairs, args.output_file, log_scale=not args.linear, mixed_scale=args.mixed, ci_mode=args.ci_mode, top_k=args.top_k)
+    plot_metrics(data_pairs, args.output_file, log_scale=not args.linear, mixed_scale=args.mixed, 
+                 ci_mode=args.ci_mode, top_k=args.top_k, filter_str=args.filter_regex)
     print(f"Plot saved to {args.output_file}")
 
 if __name__ == "__main__":
