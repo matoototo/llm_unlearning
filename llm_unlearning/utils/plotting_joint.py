@@ -170,7 +170,7 @@ def process_folder(folder_path, confidence):
     for base_name in all_files:
         retain_file = f"{base_name}_retain_results.json"
         forget_file = f"{base_name}_forget_results.json"
-        
+
         retain_data = load_json(retain_file) if os.path.exists(retain_file) else None
         forget_data = load_json(forget_file) if os.path.exists(forget_file) else None
 
@@ -180,8 +180,13 @@ def process_folder(folder_path, confidence):
 
     return data_pairs
 
-def plot_metrics(data_pairs, output_file, log_scale=True, mixed_scale=False, ci_mode='y'):
+def plot_metrics(data_pairs, output_file, log_scale=True, mixed_scale=False, ci_mode='y', top_k=None):
     fig, ax1 = plt.subplots(figsize=(12, 8))
+
+    # Sort data_pairs based on peak forget quality if top_k is specified
+    if top_k is not None:
+        data_pairs.sort(key=lambda x: max(x[2]) if isinstance(x[2], np.ndarray) else max(extract_metrics(x[2], 'ks_test')[1]) if x[2] else 0, reverse=True)
+        data_pairs = data_pairs[:top_k]
 
     colors = plt.cm.rainbow(np.linspace(0, 1, len(data_pairs)))
 
@@ -254,17 +259,20 @@ def main():
     parser.add_argument('--mixed', action='store_true', help='Use mixed log-linear scale for FQ (log until 0.1, linear above)')
     parser.add_argument('--confidence', type=float, default=0.95, help='Confidence level for the interval (default: 0.95)')
     parser.add_argument('--ci-mode', choices=['x', 'y'], default='y', help='Axis for confidence interval (x or y, default: y)')
+    parser.add_argument('--no-confidence', action='store_true', help='Disable confidence intervals')
+    parser.add_argument('--top_k', type=int, help='Only display results of the top k runs, based on peak forget quality')
     args = parser.parse_args()
 
     if not os.path.isdir(args.input_folder):
         raise ValueError("Input must be a folder containing retain and forget JSON files")
 
-    data_pairs = process_folder(args.input_folder, args.confidence)
+    confidence = 0.0 if args.no_confidence else args.confidence
+    data_pairs = process_folder(args.input_folder, confidence)
 
     if not data_pairs:
         raise ValueError("No valid pairs of retain and forget files found in the input folder")
 
-    plot_metrics(data_pairs, args.output_file, log_scale=not args.linear, mixed_scale=args.mixed, ci_mode=args.ci_mode)
+    plot_metrics(data_pairs, args.output_file, log_scale=not args.linear, mixed_scale=args.mixed, ci_mode=args.ci_mode, top_k=args.top_k)
     print(f"Plot saved to {args.output_file}")
 
 if __name__ == "__main__":
