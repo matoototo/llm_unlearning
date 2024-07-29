@@ -7,7 +7,7 @@ class AdversarialAttack:
     def __init__(self, **kwargs):
         pass
 
-    def attack(self, model: torch.nn.Module, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def attack(self, model: torch.nn.Module, inputs: Dict[str, torch.Tensor], is_grad_accumulation: bool) -> Dict[str, torch.Tensor]:
         raise NotImplementedError("Subclasses must implement this method")
 
 class PGDAttack(AdversarialAttack):
@@ -17,16 +17,19 @@ class PGDAttack(AdversarialAttack):
         self.alpha = kwargs.get('alpha', 0.001)
         self.num_iterations = kwargs.get('num_iterations', 3)
 
-    def attack(self, model: torch.nn.Module, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def attack(self, model: torch.nn.Module, inputs: Dict[str, torch.Tensor], is_grad_accumulation: bool) -> Dict[str, torch.Tensor]:
         input_ids = inputs['forget_inputs']['input_ids']
         attention_mask = inputs['forget_inputs']['attention_mask']
         labels = inputs['forget_inputs']['labels']
+
+        original_grads = [param.grad.clone() if is_grad_accumulation and param.grad is not None else None for param in model.parameters()]
 
         original_embeddings = model.get_input_embeddings()(input_ids)
         perturbed_embeddings = original_embeddings.clone().detach()
 
         for _ in range(self.num_iterations):
             perturbed_embeddings.requires_grad = True
+            model.zero_grad()
 
             outputs = model(inputs_embeds=perturbed_embeddings, attention_mask=attention_mask, labels=labels)
             loss = outputs.loss
@@ -40,6 +43,10 @@ class PGDAttack(AdversarialAttack):
 
         inputs['forget_inputs']['inputs_embeds'] = perturbed_embeddings
         inputs['forget_inputs'].pop('input_ids', None)
+
+        if is_grad_accumulation:
+            for param, grad in zip(model.parameters(), original_grads):
+                param.grad = grad
 
         return inputs
 

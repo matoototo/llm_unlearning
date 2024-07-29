@@ -12,6 +12,7 @@ class UnlearningTrainer(Trainer):
         super().__init__(*args, **kwargs)
         self.loss_components: Dict[str, float] = {}
         self.loss_component_counts: Dict[str, int] = {}
+        self.is_grad_accumulation = self.args.gradient_accumulation_steps > 1
         self.method = get_method(method, **unlearning_kwargs)
         self.attack = get_attack(at_attack, **attack_kwargs) if at_attack else None
 
@@ -27,7 +28,7 @@ class UnlearningTrainer(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False):
         if self.attack:
-            inputs = self.attack.attack(model, inputs)
+            inputs = self.attack.attack(model, inputs, self.is_grad_accumulation)
 
         loss, loss_dict, outputs = self.method.compute_loss(model, **inputs, reference_model=self.reference_model)
 
