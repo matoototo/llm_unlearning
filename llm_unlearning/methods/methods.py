@@ -1,8 +1,9 @@
+import math
 import torch
 import einops
 import torch.nn.functional as F
 
-from typing import Any, Dict, Tuple, List
+from typing import Any, Dict, Tuple, List, Callable
 from transformers import PreTrainedModel
 from llm_unlearning.evals.utils import sequence_nll
 
@@ -12,13 +13,40 @@ def check_inputs(required_inputs: List[str], **kwargs):
     if missing_inputs:
         raise ValueError(f"Missing required input(s): {', '.join(missing_inputs)}")
 
+def cosine_annealing(start_factor, time_scale):
+    def schedule(t: float) -> float:
+        if t < time_scale:
+            scale = (math.cos(math.pi * t / time_scale) + 1) / 2
+            return 1 + (start_factor - 1) * scale
+        else:
+            return 1.0
+    return schedule
+
+schedule_map = {
+    "10x_cosine": cosine_annealing(10, 1),
+    "10x_cosine_half": cosine_annealing(10, 0.5),
+    "10x_cosine_quarter": cosine_annealing(10, 0.25),
+}
+
 class Method:
     def __init__(self, **kwargs):
         self.setup(**kwargs)
         self.input_keys = ["input_ids", "inputs_embeds", "attention_mask", "labels"]
+        self.schedules = {}
+        self.original_values = {}
 
     def setup(self, **kwargs):
         pass
+
+    def register_scheduled_value(self, name: str, schedule_name: str):
+        schedule = schedule_map[schedule_name]
+        self.schedules[name] = schedule
+        self.original_values[name] = getattr(self, name)
+
+    def update_scheduled_values(self, step_ratio: float):
+        for name, schedule in self.schedules.items():
+            original_value = self.original_values[name]
+            setattr(self, name, schedule(step_ratio) * original_value)
 
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         raise NotImplementedError("Subclasses must implement this method")
@@ -85,9 +113,16 @@ class NPO(Method):
         super().__init__(**kwargs)
         self.beta = kwargs.get("beta", 0.1)
         self.retain_coeff = kwargs.get("retain_coeff", 1.0)
+        self.hat_coeff = kwargs.get("hat_coeff", 0)
+        self.schedule_beta = kwargs.get("schedule_beta", False)
+        if self.schedule_beta:
+            self.register_scheduled_value("beta", self.schedule_beta)
 
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs", "retain_inputs"], **kwargs)
+        check_inputs(["inputs_embeds", "delta"], **kwargs["forget_inputs"])
+        self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
+
         reference_model = kwargs.get("reference_model") if "reference_model" in kwargs else None
         if not reference_model: raise ValueError("NPO requires a config.reference_model to be set")
 
@@ -105,12 +140,23 @@ class NPO(Method):
         if self.retain_coeff:
             retain_inputs = {k: v for k, v in kwargs['retain_inputs'].items() if k in self.input_keys}
             retain_outputs = model(**retain_inputs)
-            npo_loss += self.retain_coeff * retain_outputs.loss
+            retain_loss = retain_outputs.loss
+            npo_loss += self.retain_coeff * retain_loss
+
+        if self.hat_coeff:
+            hat_inputs_embeds = kwargs["forget_inputs"]["inputs_embeds"] + kwargs["forget_inputs"]["delta"]
+            hat_outputs = model(inputs_embeds=hat_inputs_embeds, attention_mask=forget_inputs["attention_mask"])
+            with torch.no_grad():
+                hat_reference_outputs = reference_model(inputs_embeds=hat_inputs_embeds, attention_mask=forget_inputs["attention_mask"])
+            hat_loss = F.kl_div(F.log_softmax(hat_outputs.logits, dim=-1), F.softmax(hat_reference_outputs.logits, dim=-1), reduction="batchmean")
+            npo_loss += self.hat_coeff * hat_loss
 
         loss_dict = {
             "npo_loss": npo_loss.item(),
             "forget_loss": forget_loss.mean().item(),
             "reference_loss": reference_loss.mean().item(),
+            "hat_loss": hat_loss.item() if self.hat_coeff else 0,
+            "retain_loss": retain_loss.item() if self.retain_coeff else 0,
         }
 
         return npo_loss, loss_dict, (forget_outputs, reference_outputs)

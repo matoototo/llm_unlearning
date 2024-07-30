@@ -30,6 +30,8 @@ class UnlearningTrainer(Trainer):
         if self.attack:
             inputs = self.attack.attack(model, inputs, self.is_grad_accumulation)
 
+        inputs['step_ratio'] = min(1.0, self.state.global_step / self.state.max_steps)
+
         loss, loss_dict, outputs = self.method.compute_loss(model, **inputs, reference_model=self.reference_model)
 
         for loss_name, loss_value in loss_dict.items():
