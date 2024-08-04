@@ -107,9 +107,9 @@ class GradientDifference(Method):
 class NPO(Method):
     # https://arxiv.org/abs/2404.05868
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
         self.beta = kwargs.get("beta", 0.1)
         self.retain_coeff = kwargs.get("retain_coeff", 1.0)
+        super().__init__(**kwargs)
 
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs", "retain_inputs"], **kwargs)
@@ -146,13 +146,13 @@ class NPO(Method):
 class RMU(Method):
     # https://arxiv.org/abs/2403.03218
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
         self.steering_coeff = kwargs.get("steering_coeff", 10.0)
         self.alpha = kwargs.get("alpha", 100.0)
         self.layer_id = kwargs.get("layer_id", 5)
         self.module_str = kwargs.get("module_str", "{model_name}.model.layers[{layer_id}]")
         self.control_vec = None
         self.frozen_layers = []
+        super().__init__(**kwargs)
 
     def freeze_layers(self, model: PreTrainedModel):
         target_layer = self.layer_id
