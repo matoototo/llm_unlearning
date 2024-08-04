@@ -42,6 +42,7 @@ class PGDAttack(AdversarialAttack):
                 perturbed_embeddings = (original_embeddings + delta).detach()
 
         inputs['forget_inputs']['inputs_embeds'] = perturbed_embeddings
+        inputs['forget_inputs']['delta'] = perturbed_embeddings - original_embeddings
         inputs['forget_inputs'].pop('input_ids', None)
 
         if is_grad_accumulation:
