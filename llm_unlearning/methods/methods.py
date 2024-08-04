@@ -51,13 +51,34 @@ class Method:
     def posthook(self, trainer, model, inputs, loss):
         pass
 
+    def compute_forget(self, model: PreTrainedModel, forget_inputs: Dict[str, torch.Tensor]) -> Any:
+        inputs = {k: v for k, v in forget_inputs.items() if k in self.input_keys}
+        pre_hook = forget_inputs.get("pre_hook")
+        post_hook = forget_inputs.get("post_hook")
+
+        handle = pre_hook(model) if pre_hook else None
+        outputs = model(**inputs)
+        outputs = post_hook(outputs, handle) if post_hook else outputs
+
+        return outputs
+
+    def compute_retain(self, model: PreTrainedModel, retain_inputs: Dict[str, torch.Tensor]) -> Any:
+        inputs = {k: v for k, v in retain_inputs.items() if k in self.input_keys}
+        pre_hook = retain_inputs.get("pre_hook")
+        post_hook = retain_inputs.get("post_hook")
+
+        handle = pre_hook(model) if pre_hook else None
+        outputs = model(**inputs)
+        outputs = post_hook(outputs, handle) if post_hook else outputs
+
+        return model(**inputs)
+
 class GradientDescent(Method):
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs"], **kwargs)
         self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
 
-        ft_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
-        outputs = model(**ft_inputs)
+        outputs = self.compute_forget(model, kwargs['forget_inputs'])
         loss_ft = outputs.loss
 
         loss_dict = {
@@ -71,8 +92,7 @@ class GradientAscent(Method):
         check_inputs(["forget_inputs"], **kwargs)
         self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
 
-        forget_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
-        outputs = model(**forget_inputs)
+        outputs = self.compute_forget(model, kwargs['forget_inputs'])
         forget_loss = outputs.loss * -1
 
         loss_dict = {
@@ -86,13 +106,10 @@ class GradientDifference(Method):
         check_inputs(["forget_inputs", "retain_inputs"], **kwargs)
         self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
 
-        forget_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
-        retain_inputs = {k: v for k, v in kwargs['retain_inputs'].items() if k in self.input_keys}
-
-        forget_outputs = model(**forget_inputs)
+        forget_outputs = self.compute_forget(model, kwargs['forget_inputs'])
         forget_loss = forget_outputs.loss * -1
 
-        retain_outputs = model(**retain_inputs)
+        retain_outputs = self.compute_retain(model, kwargs['retain_inputs'])
         retain_loss = retain_outputs.loss
 
         total_loss = forget_loss + retain_loss
@@ -117,20 +134,17 @@ class NPO(Method):
         reference_model = kwargs.get("reference_model") if "reference_model" in kwargs else None
         if not reference_model: raise ValueError("NPO requires a config.reference_model to be set")
 
-        forget_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
-
-        forget_outputs = model(**forget_inputs)
-        forget_loss = sequence_nll(forget_outputs.logits, forget_inputs["labels"])
+        forget_outputs = self.compute_forget(model, kwargs['forget_inputs'])
+        forget_loss = sequence_nll(forget_outputs.logits, kwargs['forget_inputs']["labels"])
         with torch.no_grad():
-            reference_outputs = reference_model(**forget_inputs)
-            reference_loss = sequence_nll(reference_outputs.logits, forget_inputs["labels"])
+            reference_outputs = self.compute_forget(reference_model, kwargs['forget_inputs'])
+            reference_loss = sequence_nll(reference_outputs.logits, kwargs['forget_inputs']["labels"])
 
         neg_logloss_ratio = (forget_loss - reference_loss)
         npo_loss = (F.logsigmoid(self.beta * neg_logloss_ratio) * -2 / self.beta).mean()
 
         if self.retain_coeff:
-            retain_inputs = {k: v for k, v in kwargs['retain_inputs'].items() if k in self.input_keys}
-            retain_outputs = model(**retain_inputs)
+            retain_outputs = self.compute_retain(model, kwargs['retain_inputs'])
             retain_loss = retain_outputs.loss
             npo_loss += self.retain_coeff * retain_loss
 
@@ -176,7 +190,7 @@ class RMU(Method):
     def posthook(self, trainer, model, inputs, loss):
         self.unfreeze_layers(model)
 
-    def get_module_activations(self, model: PreTrainedModel, inputs: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def get_module_activations(self, model: PreTrainedModel, inputs: Dict[str, torch.Tensor], input_key: str) -> torch.Tensor:
         activations = []
 
         def hook_fn(module, input, output):
@@ -186,7 +200,10 @@ class RMU(Method):
         handle = module.register_forward_hook(hook_fn)
 
         with torch.set_grad_enabled(model.training):
-            model(**inputs)
+            if input_key == "forget_inputs":
+                self.compute_forget(model, inputs["forget_inputs"])
+            elif input_key == "retain_inputs":
+                self.compute_retain(model, inputs["retain_inputs"])
 
         handle.remove()
         return activations[0][0]
@@ -197,21 +214,18 @@ class RMU(Method):
         reference_model = kwargs.get("reference_model") if "reference_model" in kwargs else None
         if not reference_model: raise ValueError("RMU requires a config.reference_model to be set")
 
-        forget_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
-        retain_inputs = {k: v for k, v in kwargs['retain_inputs'].items() if k in self.input_keys}
-
         # Control vector is kept the same throughout unlearning
         if self.control_vec is None:
             self.control_vec = torch.rand(1, 1, model.config.hidden_size, dtype=model.dtype, device=model.device)
             self.control_vec = self.control_vec / torch.norm(self.control_vec) * self.steering_coeff
 
-        forget_activations = self.get_module_activations(model, forget_inputs)
+        forget_activations = self.get_module_activations(model, "forget_inputs")
         control_vec_repeat = einops.repeat(self.control_vec, "1 1 d -> b n d", b=forget_activations.size(0), n=forget_activations.size(1))
         unlearn_loss = F.mse_loss(forget_activations, control_vec_repeat)
 
-        retain_activations = self.get_module_activations(model, retain_inputs)
+        retain_activations = self.get_module_activations(model, "retain_inputs")
         with torch.no_grad():
-            reference_retain_activations = self.get_module_activations(reference_model, retain_inputs)
+            reference_retain_activations = self.get_module_activations(reference_model, "retain_inputs")
         retain_loss = F.mse_loss(retain_activations, reference_retain_activations)
         retain_loss *= self.alpha
 
