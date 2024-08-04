@@ -123,8 +123,35 @@ The dataset(s) and their splits to be used in unlearning. The example inherits t
 
 #### unlearning
 
-Currently only has one field, which identifies which unlearning method to use. All available methods can be found at the bottom of `llm_unlearning/methods/methods.py`.
+Specifies a unlearning method and its parameters. All available methods can be found at the bottom of `llm_unlearning/methods/methods.py`.
 - `method`: Name of the unlearning method
+- `kwargs`: A dictionary of keyword arguments for the unlearning method
+  - You can include scheduling configs here
+- `adversarial_attack`: (Optional) Type of adversarial attack to use during unlearning
+
+Example of unlearning configuration with parameter scheduling:
+
+```yaml
+unlearning:
+    method: "npo"
+    kwargs:
+        beta: 0.01
+        schedule_beta:
+            name: "cosine"
+            start_factor: 10.0
+            end_factor: 1.0
+            time_scale: 0.8
+    adversarial_attack: "pgd"
+```
+
+In this example, the method is "NPO" with a cosine scheduled `beta` parameter:
+- The initial `beta` value is set to 0.01
+- `schedule_beta` defines a cosine annealing schedule for the `beta` parameter:
+  - It starts at 0.1 (10 * 0.01)
+  - Decreases with cosine annealing to 0.01 over 80% of the steps
+  - For the final 20% of training, beta remains at 0.01
+
+All available schedules can be found in `llm_unlearning.utils.schedules`.
 
 #### output_dir
 

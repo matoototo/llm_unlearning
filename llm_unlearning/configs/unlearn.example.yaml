@@ -29,6 +29,11 @@ unlearning:
     method: "npo"
     kwargs:
         beta: 0.01
+        # schedule_beta:
+        #     name: "cosine"
+        #     start_factor: 10.0  # Start beta at 10 times its initial value,
+        #     end_factor: 1.0     # schedule down to initial beta,
+        #     time_scale: 0.8     # over the first 25% steps
     adversarial_attack: "pgd"
 
 output_dir: ./results/${unlearning.method}/${dataset.forget.split}_beta_${unlearning.kwargs.beta}_attack_${unlearning.adversarial_attack}

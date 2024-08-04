@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from typing import Any, Dict, Tuple, List
 from transformers import PreTrainedModel
 from llm_unlearning.evals.utils import sequence_nll
+from llm_unlearning.utils.schedules import get_schedule
 
 def check_inputs(required_inputs: List[str], **kwargs):
     missing_inputs = [input_name for input_name in required_inputs if input_name not in kwargs]
@@ -16,9 +17,30 @@ class Method:
     def __init__(self, **kwargs):
         self.setup(**kwargs)
         self.input_keys = ["input_ids", "inputs_embeds", "attention_mask", "labels"]
+        self.schedules = {}
+        self.original_values = {}
+        self.register_scheduled_values(kwargs)
 
     def setup(self, **kwargs):
         pass
+
+    def register_scheduled_values(self, config):
+        for key, value in config.items():
+            if not key.startswith("schedule_"): continue
+            param_name = key[len("schedule_"):]
+            if not hasattr(self, param_name):
+                raise AttributeError(f"Method has no attribute '{param_name}' to schedule")
+            original_value = getattr(self, param_name)
+            try:
+                self.schedules[param_name] = get_schedule(value)
+                self.original_values[param_name] = original_value
+            except ValueError as e:
+                raise ValueError(f"Error creating schedule for '{param_name}': {str(e)}")
+
+    def update_scheduled_values(self, step_ratio: float):
+        for name, schedule in self.schedules.items():
+            original_value = self.original_values[name]
+            setattr(self, name, schedule(step_ratio) * original_value)
 
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         raise NotImplementedError("Subclasses must implement this method")
@@ -32,6 +54,7 @@ class Method:
 class GradientDescent(Method):
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs"], **kwargs)
+        self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
 
         ft_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
         outputs = model(**ft_inputs)
@@ -46,6 +69,7 @@ class GradientDescent(Method):
 class GradientAscent(Method):
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs"], **kwargs)
+        self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
 
         forget_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
         outputs = model(**forget_inputs)
@@ -60,6 +84,7 @@ class GradientAscent(Method):
 class GradientDifference(Method):
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs", "retain_inputs"], **kwargs)
+        self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
 
         forget_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
         retain_inputs = {k: v for k, v in kwargs['retain_inputs'].items() if k in self.input_keys}
@@ -88,6 +113,7 @@ class NPO(Method):
 
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs", "retain_inputs"], **kwargs)
+        self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
         reference_model = kwargs.get("reference_model") if "reference_model" in kwargs else None
         if not reference_model: raise ValueError("NPO requires a config.reference_model to be set")
 
@@ -105,12 +131,14 @@ class NPO(Method):
         if self.retain_coeff:
             retain_inputs = {k: v for k, v in kwargs['retain_inputs'].items() if k in self.input_keys}
             retain_outputs = model(**retain_inputs)
-            npo_loss += self.retain_coeff * retain_outputs.loss
+            retain_loss = retain_outputs.loss
+            npo_loss += self.retain_coeff * retain_loss
 
         loss_dict = {
             "npo_loss": npo_loss.item(),
             "forget_loss": forget_loss.mean().item(),
             "reference_loss": reference_loss.mean().item(),
+            "retain_loss": retain_loss.item() if self.retain_coeff else 0,
         }
 
         return npo_loss, loss_dict, (forget_outputs, reference_outputs)
@@ -165,6 +193,7 @@ class RMU(Method):
 
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs", "retain_inputs"], **kwargs)
+        self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
         reference_model = kwargs.get("reference_model") if "reference_model" in kwargs else None
         if not reference_model: raise ValueError("RMU requires a config.reference_model to be set")
 
