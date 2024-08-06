@@ -127,12 +127,13 @@ class NPO(Method):
 
         neg_logloss_ratio = (forget_loss - reference_loss)
         npo_loss = (F.logsigmoid(self.beta * neg_logloss_ratio) * -2 / self.beta).mean()
+        loss = npo_loss
 
         if self.retain_coeff:
             retain_inputs = {k: v for k, v in kwargs['retain_inputs'].items() if k in self.input_keys}
             retain_outputs = model(**retain_inputs)
             retain_loss = retain_outputs.loss
-            npo_loss += self.retain_coeff * retain_loss
+            loss += self.retain_coeff * retain_loss
 
         loss_dict = {
             "npo_loss": npo_loss.item(),
@@ -141,7 +142,7 @@ class NPO(Method):
             "retain_loss": retain_loss.item() if self.retain_coeff else 0,
         }
 
-        return npo_loss, loss_dict, (forget_outputs, reference_outputs)
+        return loss, loss_dict, (forget_outputs, reference_outputs)
 
 class RMU(Method):
     # https://arxiv.org/abs/2403.03218
