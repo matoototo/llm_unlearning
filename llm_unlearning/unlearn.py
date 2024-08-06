@@ -1,4 +1,6 @@
 import hydra
+import wandb
+
 from omegaconf import DictConfig, OmegaConf
 
 from llm_unlearning.utils import cfg_to_training_args
@@ -8,6 +10,13 @@ from llm_unlearning.unlearning_datasets import load_unlearning_dataset
 
 @hydra.main(config_path="configs", config_name="unlearn", version_base=None)
 def main(cfg: DictConfig) -> None:
+    wandb.init(
+        project="llm-unlearning",
+        config=OmegaConf.to_container(cfg, resolve=True),
+        group=cfg.get("group", None),
+        job_type="unlearn",
+        reinit=True,
+    )
     print(OmegaConf.to_yaml(cfg))
 
     model, tokenizer = load_model_and_tokenizer(cfg.model)
@@ -29,6 +38,8 @@ def main(cfg: DictConfig) -> None:
     )
 
     trainer.train()
+
+    wandb.finish()
 
 if __name__ == "__main__":
     main()
