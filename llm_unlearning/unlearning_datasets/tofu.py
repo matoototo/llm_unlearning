@@ -48,7 +48,7 @@ class TofuDataset(Dataset):
         result = self._encode_qa_pair(question, answer)
 
         _result_keys = list(result.keys())
-        if hasattr(self.config, 'perturbed_answer_key'):
+        if hasattr(self.config, 'perturbed_answer_key') and self.config.perturbed_answer_key in item:
             perturbed_answers = item[self.config.perturbed_answer_key]
             for key in _result_keys:
                 result[f"perturbed_{key}"] = [
@@ -56,7 +56,7 @@ class TofuDataset(Dataset):
                     for perturbed_answer in perturbed_answers
                 ]
 
-        if hasattr(self.config, 'paraphrased_answer_key'):
+        if hasattr(self.config, 'paraphrased_answer_key') and self.config.paraphrased_answer_key in item:
             paraphrased_answer = item[self.config.paraphrased_answer_key]
             paraphrased_result = self._encode_qa_pair(question, paraphrased_answer)
             for key in _result_keys:
