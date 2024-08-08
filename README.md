@@ -121,6 +121,9 @@ The dataset(s) and their splits to be used in unlearning. The example inherits t
 - `forget`: Forget dataset
 - `retain`: Retain dataset
 
+The TOFU dataset supports non-standard (larger) splits and held-out sets for testing. The latter is activated through ":0" and ":1" split suffixes. 0 will use the first half of the split, 1 will use the second half. It's intended to treat these as validation/test splits – recommendation is to use the first half for hyperparameter tuning and the second half as a final test.
+
+
 #### unlearning
 
 Specifies a unlearning method and its parameters. All available methods can be found at the bottom of `llm_unlearning/methods/methods.py`.

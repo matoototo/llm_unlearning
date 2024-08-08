@@ -19,22 +19,31 @@ class TofuDataset(Dataset):
         self.data = self._load_split()
 
     def _load_split(self):
+        part = None
+        split = self.split
+        if ":" in split: split, part = split.split(":")
         try:
-            return datasets.load_dataset("locuslab/TOFU", self.split)["train"]
+            dataset = datasets.load_dataset("locuslab/TOFU", split)["train"]
         except ValueError:
-            return self._create_custom_split()
+            dataset = self._create_custom_split(split)
+        if not part: return dataset
+        indices = [i for i in range(len(dataset))]
+        indices = indices[:len(dataset) // 2] if int(part) == 0 else indices[len(dataset) // 2:]
+        return dataset.select(indices)
 
-    def _create_custom_split(self):
+
+    def _create_custom_split(self, split):
         full_data = datasets.load_dataset("locuslab/TOFU", "full")["train"]
-        prefix = self.split[:6]
-        suffix = self.split[6:]
+        prefix = split[:6]
+        suffix = split[6:]
         if not prefix in ["forget", "retain"] or not suffix.isdigit():
-            raise ValueError(f"Invalid split: {self.split}")
+            raise ValueError(f"Invalid split: {split}")
         percentage = int(suffix)
         split_size = int(len(full_data) * percentage / 100)
         indices = [i for i in range(len(full_data))]
         if prefix == "retain": return full_data.select(indices[:split_size])
         return full_data.select(indices[-split_size:])
+
     def __len__(self) -> int:
         return len(self.data)
 

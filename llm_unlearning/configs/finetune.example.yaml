@@ -15,12 +15,12 @@ dataset:
     name: "tofu"
     forget:
         <<: *base_dataset
-        split: "retain99"
+        split: "retain90:0"
 
 unlearning:
     method: "gradient_descent"
 
-output_dir: ./results/retain_99
+output_dir: ./results/retain_90
 
 training_arguments:
     output_dir: ${output_dir}
