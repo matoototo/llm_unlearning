@@ -16,5 +16,6 @@ setup(name='llm_unlearning',
           'matplotlib',
           'rouge_score',
           'scipy',
+          'scikit-learn',
       ],
 )
