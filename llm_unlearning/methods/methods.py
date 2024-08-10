@@ -263,16 +263,15 @@ class EmbeddingRemapping(Method):
         return embeddings[0] if type(embeddings[0]) == torch.Tensor else embeddings[0][0]
 
     def get_target_token_embedding(self, inputs: Dict[str, torch.Tensor], layer_embedding: torch.Tensor) -> torch.Tensor:
-        # Maybe we want to do something else here? Average?
-        question_end = inputs['question_length']
-        return layer_embedding[torch.arange(layer_embedding.size(0)), question_end - 1]
+        # Maybe we want to do something else here? Currently it's the first non-tag answer token.
+        question_end = inputs['question_length'] # [..., 33706|, 25, first_token, ...] where 33706,25 is "Answer:"
+        return layer_embedding[torch.arange(layer_embedding.size(0)), question_end + 2]
 
     def adversarial_search(self, model: PreTrainedModel, inputs: Dict[str, torch.Tensor]) -> List[torch.Tensor]:
         input_ids = inputs['input_ids']
         attention_mask = inputs['attention_mask']
 
         original_embeddings = model.get_input_embeddings()(input_ids)
-        # perturbed_embeddings = original_embeddings.clone().detach()
         layer_embeddings = self.get_layer_embedding(model, inputs)
         target_token_embeddings = [self.get_target_token_embedding(inputs, layer_embeddings)]
 
@@ -290,10 +289,11 @@ class EmbeddingRemapping(Method):
 
                 distances = torch.cdist(target_token_embedding.unsqueeze(0), torch.stack(target_token_embeddings, dim=1))
                 distances = einops.rearrange(distances, "b p r -> b (p r)")
-                loss = -torch.min(distances, dim=1).values.sum()
+                loss = torch.min(distances, dim=1).values.sum()
                 loss.backward()
 
                 with torch.no_grad():
+                    # TODO: Do we want to perturb the full sequence embedding or just the target token?
                     grad = perturbed_embeddings.grad
                     perturbed_embeddings = perturbed_embeddings + self.alpha * grad.sign()
                     delta = self.project_l2(perturbed_embeddings - original_embeddings)
