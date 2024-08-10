@@ -235,15 +235,8 @@ class EmbeddingRemapping(Method):
         self.num_inner_at_iterations = kwargs.get("num_inner_at_iterations", 2)
         self.epsilon = kwargs.get("epsilon", 0.01)
         self.alpha = kwargs.get('alpha', 0.001)
-        self.boundary_type = kwargs.get("boundary_type", "ellipsoid")
-        self.projection_type = kwargs.get("projection_type", "learned")
-        self.projection = None
+        self.boundary_type = kwargs.get("boundary_type", "epsilon_ball")
         self.boundaries = []
-        self.projection_optimizer = None
-
-        if self.projection_type == "learned":
-            self.projection = torch.nn.Linear(kwargs["model_dim"], kwargs["model_dim"])
-            self.projection_optimizer = torch.optim.Adam(self.projection.parameters(), lr=3e-4)
 
     def get_layer_embedding(self, model: PreTrainedModel, inputs: Dict[str, torch.Tensor], with_grad: bool = False) -> torch.Tensor:
         embeddings = []
@@ -328,29 +321,24 @@ class EmbeddingRemapping(Method):
             raise ValueError(f"Unsupported boundary type: {self.boundary_type}")
 
     def project_embedding(self, embedding: torch.Tensor, boundary: Any) -> torch.Tensor:
-        if self.projection_type == "learned":
-            self.projection = self.projection.to(embedding.device)
-            return self.projection(embedding)
-        elif self.projection_type == "outside_boundary":
-            if self.boundary_type == "epsilon_ball":
-                center, radius = boundary
-                direction = embedding - center
-                return center + (radius + self.epsilon) * F.normalize(direction, dim=-1)
-            elif self.boundary_type == "ellipsoid":
-                center, cov = boundary
-                eigenvalues, eigenvectors = torch.linalg.eigh(cov)
-                scaled_direction = torch.matmul(embedding - center, eigenvectors) / torch.sqrt(eigenvalues)
-                scaled_direction = F.normalize(scaled_direction, dim=-1)
-                return center + torch.matmul(scaled_direction * (torch.max(eigenvalues) + self.epsilon), eigenvectors.T)
-            elif self.boundary_type == "axis_aligned":
-                center, variances = boundary
-                direction = embedding - center
-                scaled_direction = direction / torch.sqrt(variances)
-                max_variance = torch.max(variances)
-                return center + (max_variance + self.epsilon) * F.normalize(scaled_direction, dim=-1)
-
+        if self.boundary_type == "epsilon_ball":
+            center, radius = boundary
+            direction = embedding - center
+            return center + (radius + self.epsilon) * F.normalize(direction, dim=-1)
+        elif self.boundary_type == "ellipsoid":
+            center, cov = boundary
+            eigenvalues, eigenvectors = torch.linalg.eigh(cov)
+            scaled_direction = torch.matmul(embedding - center, eigenvectors) / torch.sqrt(eigenvalues)
+            scaled_direction = F.normalize(scaled_direction, dim=-1)
+            return center + torch.matmul(scaled_direction * (torch.max(eigenvalues) + self.epsilon), eigenvectors.T)
+        elif self.boundary_type == "axis_aligned":
+            center, variances = boundary
+            direction = embedding - center
+            scaled_direction = direction / torch.sqrt(variances)
+            max_variance = torch.max(variances)
+            return center + (max_variance + self.epsilon) * F.normalize(scaled_direction, dim=-1)
         else:
-            raise ValueError(f"Unsupported projection type: {self.projection_type}")
+            raise ValueError(f"Unsupported boundary type: {self.boundary_type}")
 
     def compute_retain_loss(self, retain_embeddings: torch.Tensor, boundary: Any) -> torch.Tensor:
         if self.boundary_type == "epsilon_ball":
@@ -366,38 +354,6 @@ class EmbeddingRemapping(Method):
             normalized_distances = (retain_embeddings - center.unsqueeze(0)) ** 2 / variances.unsqueeze(0)
             retain_distances = torch.sum(normalized_distances, dim=-1)
             return F.relu(1 - retain_distances).mean()
-
-    def update_projection(self, model: PreTrainedModel, forget_inputs: Dict[str, torch.Tensor], forget_embeddings: List[torch.Tensor], boundary: Any):
-        if self.projection_type == "outside_boundary": return 0
-
-        forget_loss = 0
-        # TODO: This seems to explode memory, each iteration is 3GB extra. Why doesn't it release?
-        for embedding in forget_embeddings:
-            projected_embedding = self.project_embedding(embedding, boundary)
-
-            def hook_fn(module, input, output):
-                token_embed = projected_embedding.unsqueeze(0)
-                token_idx = forget_inputs['question_length'] - 1
-                output[0][0, token_idx] = token_embed
-                return output
-
-            layer = model.model.layers[self.layer_id]
-            handle = layer.register_forward_hook(hook_fn)
-
-            outputs = model(input_ids=forget_inputs['input_ids'], attention_mask=forget_inputs['attention_mask'], labels=forget_inputs['labels'])
-            forget_loss += outputs.loss
-
-            handle.remove()
-
-        forget_loss /= len(forget_embeddings)
-        if self.projection_type != "learned": return forget_loss.item
-
-        # Update projection model to maximize forget loss
-        self.projection_optimizer.zero_grad()
-        (-forget_loss).backward()
-        self.projection_optimizer.step()
-
-        return forget_loss.item()
 
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs", "retain_inputs"], **kwargs)
@@ -420,26 +376,19 @@ class EmbeddingRemapping(Method):
             new_boundaries.append(boundary)
         self.boundaries.extend(new_boundaries)
 
-        # Update projection model and compute forget loss
-        forget_loss = 0
-        for i, (forget_embeddings, boundary) in enumerate(zip(all_forget_embeddings, new_boundaries)):
-            single_forget_input = {k: v[i].unsqueeze(0) for k, v in forget_inputs.items()}
-            forget_loss += self.update_projection(model, single_forget_input, forget_embeddings, boundary)
-        forget_loss /= len(all_forget_embeddings)
-
+        # TODO: Do we want this?
         # Compute retain loss against all saved boundaries
-        retain_embeddings = self.get_layer_embedding(model, retain_inputs, with_grad=True)
-        retain_loss = 0
-        for saved_boundary in self.boundaries:
-            retain_loss += self.compute_retain_loss(retain_embeddings, saved_boundary)
-        retain_loss /= len(self.boundaries)
+        # retain_embeddings = self.get_layer_embedding(model, retain_inputs, with_grad=True)
+        # retain_loss = 0
+        # for saved_boundary in self.boundaries:
+        #     retain_loss += self.compute_retain_loss(retain_embeddings, saved_boundary)
+        # retain_loss /= len(self.boundaries)
 
-        total_loss = retain_loss
+        # Return a dummy loss of 0 to keep the trainer happy
+        total_loss = torch.tensor(0.0, requires_grad=True, device=model.device)
 
         loss_dict = {
-            "forget_loss": forget_loss, # We only optimise the projection with this loss in "learned" mode
-            "retain_loss": retain_loss.item(),
-            "total_loss": total_loss.item(),
+            "total_loss": total_loss,
         }
 
         return total_loss, loss_dict, None
