@@ -11,6 +11,8 @@ from omegaconf import DictConfig, OmegaConf
 from llm_unlearning.evals.evaluator import Evaluator
 from llm_unlearning.models import load_model_and_tokenizer
 from llm_unlearning.unlearning_datasets import TofuDataset
+from llm_unlearning.methods import EmbeddingRemapping
+from llm_unlearning.models.embedding_remapping import EmbeddingRemappingModelWrapper
 
 def get_checkpoint_paths(cfg: DictConfig) -> List[str]:
     paths = []
@@ -48,7 +50,17 @@ def load_model_for_evaluation(cfg: DictConfig, checkpoint_path: str) -> Tuple[An
         cfg.model.path = checkpoint_path
         cfg.model.tokenizer_path = checkpoint_path
 
-    return load_model_and_tokenizer(cfg.model)
+    model, tokenizer = load_model_and_tokenizer(cfg.model)
+
+    # TODO: Do this nicer
+    if os.path.exists(os.path.join(cfg.model.path, "embedding_boundaries.pt")):
+        print("Loading embedding remapping boundaries, wrapping model with EmbeddingRemappingModelWrapper")
+        embedding_remapping_config = EmbeddingRemapping.load_config(cfg.model.path)
+        embedding_remapping = EmbeddingRemapping(**embedding_remapping_config)
+        embedding_remapping.boundaries = EmbeddingRemapping.load_boundaries(cfg.model.path)
+        model = EmbeddingRemappingModelWrapper(model, embedding_remapping)
+
+    return model, tokenizer
 
 def evaluate_checkpoint(model: Any, tokenizer: Any, evaluation_groups: List[Dict[str, Any]], cfg: DictConfig) -> Dict[str, Dict[str, Any]]:
     checkpoint_results = {}

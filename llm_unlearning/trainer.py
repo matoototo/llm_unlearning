@@ -1,6 +1,6 @@
 from transformers import Trainer
-from typing import Callable, List, Dict
-from llm_unlearning.methods import get_method, get_attack
+from typing import Callable, List, Dict, Optional
+from llm_unlearning.methods import get_method, get_attack, EmbeddingRemapping
 
 class UnlearningTrainer(Trainer):
     def __init__(self, *args, **kwargs):
@@ -70,3 +70,13 @@ class UnlearningTrainer(Trainer):
             posthook(self, model, inputs, out)
 
         return out
+
+    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
+        super().save_model(output_dir, _internal_call)
+        if isinstance(self.method, EmbeddingRemapping):
+            self.method.save_boundaries(output_dir)
+
+    def _load_from_checkpoint(self, resume_from_checkpoint):
+        super()._load_from_checkpoint(resume_from_checkpoint)
+        if isinstance(self.method, EmbeddingRemapping):
+            self.method.boundaries = EmbeddingRemapping.load_boundaries(resume_from_checkpoint)

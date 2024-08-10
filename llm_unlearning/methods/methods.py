@@ -1,12 +1,15 @@
+import os
 import torch
 import einops
 import torch.nn.functional as F
 
+from omegaconf import OmegaConf
 from typing import Any, Dict, Tuple, List
 from transformers import PreTrainedModel
 from sklearn.covariance import EmpiricalCovariance
 from llm_unlearning.evals.utils import sequence_nll
 from llm_unlearning.utils.schedules import get_schedule
+
 
 def check_inputs(required_inputs: List[str], **kwargs):
     missing_inputs = [input_name for input_name in required_inputs if input_name not in kwargs]
@@ -257,7 +260,10 @@ class EmbeddingRemapping(Method):
 
     def get_target_token_embedding(self, inputs: Dict[str, torch.Tensor], layer_embedding: torch.Tensor) -> torch.Tensor:
         # Maybe we want to do something else here? Currently it's the first non-tag answer token.
-        question_end = inputs['question_length'] # [..., 33706|, 25, first_token, ...] where 33706,25 is "Answer:"
+        if 'question_length' not in inputs:
+            question_end = (inputs['input_ids'] == 33706).nonzero(as_tuple=True)[1]
+        else:
+            question_end = inputs['question_length'] # [..., 33706|, 25, first_token, ...] where 33706,25 is "Answer:"
         return layer_embedding[torch.arange(layer_embedding.size(0)), question_end + 2]
 
     def adversarial_search(self, model: PreTrainedModel, inputs: Dict[str, torch.Tensor]) -> List[torch.Tensor]:
@@ -340,6 +346,23 @@ class EmbeddingRemapping(Method):
         else:
             raise ValueError(f"Unsupported boundary type: {self.boundary_type}")
 
+    def is_inside_boundary(self, embedding: torch.Tensor, boundary: Any) -> bool:
+        if self.boundary_type == "epsilon_ball":
+            center, radius = boundary
+            distance = torch.norm(embedding - center)
+            return distance <= radius
+        elif self.boundary_type == "ellipsoid":
+            center, cov = boundary
+            diff = embedding - center
+            mahalanobis_distance = torch.sqrt(torch.einsum('i,ij,j->', diff, torch.inverse(cov), diff))
+            return mahalanobis_distance <= 1
+        elif self.boundary_type == "axis_aligned":
+            center, variances = boundary
+            normalized_distances = ((embedding - center) ** 2) / variances
+            return torch.all(normalized_distances <= 1)
+        else:
+            raise ValueError(f"Unsupported boundary type: {self.boundary_type}")
+
     def compute_retain_loss(self, retain_embeddings: torch.Tensor, boundary: Any) -> torch.Tensor:
         if self.boundary_type == "epsilon_ball":
             center, radius = boundary
@@ -388,10 +411,43 @@ class EmbeddingRemapping(Method):
         total_loss = torch.tensor(0.0, requires_grad=True, device=model.device)
 
         loss_dict = {
-            "total_loss": total_loss,
+            "total_loss": total_loss.item(),
         }
 
         return total_loss, loss_dict, None
+
+    def save_config(self, save_directory: str):
+        config = {
+            "layer_id": self.layer_id,
+            "num_at_supports": self.num_at_supports,
+            "num_inner_at_iterations": self.num_inner_at_iterations,
+            "epsilon": self.epsilon,
+            "alpha": self.alpha,
+            "boundary_type": self.boundary_type,
+        }
+        config_path = os.path.join(save_directory, "embedding_remapping_config.yaml")
+        OmegaConf.save(config, config_path)
+
+    def save_boundaries(self, save_directory: str):
+        boundaries_path = os.path.join(save_directory, "embedding_boundaries.pt")
+        torch.save(self.boundaries, boundaries_path)
+        self.save_config(save_directory)
+
+    @classmethod
+    def load_config(cls, load_directory: str):
+        config_path = os.path.join(load_directory, "embedding_remapping_config.yaml")
+        if os.path.exists(config_path):
+            return OmegaConf.load(config_path)
+        raise FileNotFoundError(f"Config file not found at {config_path}")
+
+    @classmethod
+    def load_boundaries(cls, load_directory: str):
+        boundaries_path = os.path.join(load_directory, "embedding_boundaries.pt")
+        if os.path.exists(boundaries_path):
+            return torch.load(boundaries_path)
+        else:
+            return []
+
 
 def get_method(method_name: str, **kwargs) -> Method:
     methods = {
