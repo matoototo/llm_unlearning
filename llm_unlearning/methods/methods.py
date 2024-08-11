@@ -4,7 +4,7 @@ import einops
 import torch.nn.functional as F
 
 from omegaconf import OmegaConf
-from typing import Any, Dict, Tuple, List
+from typing import Any, Dict, Optional, Tuple, List
 from transformers import PreTrainedModel
 from sklearn.covariance import EmpiricalCovariance
 from llm_unlearning.evals.utils import sequence_nll
@@ -258,12 +258,13 @@ class EmbeddingRemapping(Method):
         handle.remove()
         return embeddings[0] if type(embeddings[0]) == torch.Tensor else embeddings[0][0]
 
-    def get_target_token_embedding(self, inputs: Dict[str, torch.Tensor], layer_embedding: torch.Tensor) -> torch.Tensor:
+    def get_target_token_embedding(self, inputs: Dict[str, torch.Tensor], layer_embedding: torch.Tensor) -> Optional[torch.Tensor]:
         # Maybe we want to do something else here? Currently it's the first non-tag answer token.
         if 'question_length' not in inputs:
             question_end = (inputs['input_ids'] == 33706).nonzero(as_tuple=True)[1]
         else:
             question_end = inputs['question_length'] # [..., 33706|, 25, first_token, ...] where 33706,25 is "Answer:"
+        if question_end.count_nonzero() == 0: return None # No answer prefix found yet
         return layer_embedding[torch.arange(layer_embedding.size(0)), question_end + 2]
 
     def adversarial_search(self, model: PreTrainedModel, inputs: Dict[str, torch.Tensor]) -> List[torch.Tensor]:
