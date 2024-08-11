@@ -233,12 +233,14 @@ class RMU(Method):
 class EmbeddingRemapping(Method):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.layer_id = kwargs.get("layer_id", 5)
-        self.num_at_supports = kwargs.get("num_at_supports", 10)
-        self.num_inner_at_iterations = kwargs.get("num_inner_at_iterations", 2)
-        self.epsilon = kwargs.get("epsilon", 0.01)
         self.alpha = kwargs.get('alpha', 0.001)
+        self.layer_id = kwargs.get("layer_id", 5)
+        self.epsilon = kwargs.get("epsilon", 0.01)
+        self.num_at_supports = kwargs.get("num_at_supports", 10)
+        assert self.num_at_supports > 1, "Number of adversarial supports must be greater than 1"
         self.boundary_type = kwargs.get("boundary_type", "epsilon_ball")
+        self.projection_strength = kwargs.get("projection_strength", 0.1)
+        self.num_inner_at_iterations = kwargs.get("num_inner_at_iterations", 2)
         self.boundaries = []
 
     def get_layer_embedding(self, model: PreTrainedModel, inputs: Dict[str, torch.Tensor], with_grad: bool = False) -> torch.Tensor:
@@ -331,19 +333,19 @@ class EmbeddingRemapping(Method):
         if self.boundary_type == "epsilon_ball":
             center, radius = boundary
             direction = embedding - center
-            return center + (radius + self.epsilon) * F.normalize(direction, dim=-1)
+            return center + (radius + self.projection_strength) * F.normalize(direction, dim=-1)
         elif self.boundary_type == "ellipsoid":
             center, cov = boundary
             eigenvalues, eigenvectors = torch.linalg.eigh(cov)
             scaled_direction = torch.matmul(embedding - center, eigenvectors) / torch.sqrt(eigenvalues)
             scaled_direction = F.normalize(scaled_direction, dim=-1)
-            return center + torch.matmul(scaled_direction * (torch.max(eigenvalues) + self.epsilon), eigenvectors.T)
+            return center + torch.matmul(scaled_direction * (torch.max(eigenvalues) + self.projection_strength), eigenvectors.T)
         elif self.boundary_type == "axis_aligned":
             center, variances = boundary
             direction = embedding - center
             scaled_direction = direction / torch.sqrt(variances)
             max_variance = torch.max(variances)
-            return center + (max_variance + self.epsilon) * F.normalize(scaled_direction, dim=-1)
+            return center + (max_variance + self.projection_strength) * F.normalize(scaled_direction, dim=-1)
         else:
             raise ValueError(f"Unsupported boundary type: {self.boundary_type}")
 
@@ -422,6 +424,7 @@ class EmbeddingRemapping(Method):
             "layer_id": self.layer_id,
             "num_at_supports": self.num_at_supports,
             "num_inner_at_iterations": self.num_inner_at_iterations,
+            "projection_strength": self.projection_strength,
             "epsilon": self.epsilon,
             "alpha": self.alpha,
             "boundary_type": self.boundary_type,
