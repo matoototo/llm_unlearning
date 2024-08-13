@@ -21,6 +21,12 @@ model:
   retain_tokenizer_path: "/path/to/retain_model"
   fp16: true
 
+# If using a wrapper, set these:
+# wrapper:
+#   name: "logit_masking" # or "embedding_remapping"
+#   kwargs:
+#     masking_percentage: 20.0
+
 batch_size: 128
 max_length: 200
 delete_after_eval: false

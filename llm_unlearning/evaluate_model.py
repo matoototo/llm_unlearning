@@ -9,10 +9,9 @@ from typing import List, Dict, Any, Tuple
 from omegaconf import DictConfig, OmegaConf
 
 from llm_unlearning.evals.evaluator import Evaluator
-from llm_unlearning.models import load_model_and_tokenizer
 from llm_unlearning.unlearning_datasets import TofuDataset
 from llm_unlearning.methods import EmbeddingRemapping
-from llm_unlearning.models.embedding_remapping import EmbeddingRemappingModelWrapper
+from llm_unlearning.models import load_model_and_tokenizer, EmbeddingRemappingModelWrapper, LogitMaskingModelWrapper
 
 def get_checkpoint_paths(cfg: DictConfig) -> List[str]:
     paths = []
@@ -52,13 +51,18 @@ def load_model_for_evaluation(cfg: DictConfig, checkpoint_path: str) -> Tuple[An
 
     model, tokenizer = load_model_and_tokenizer(cfg.model)
 
-    # TODO: Do this nicer
-    if os.path.exists(os.path.join(cfg.model.path, "embedding_boundaries.pt")):
+    wrapper_config = cfg.get("wrapper", {})
+    if wrapper_config and os.path.exists(os.path.join(cfg.model.path, "embedding_boundaries.pt")):
         print("Loading embedding remapping boundaries, wrapping model with EmbeddingRemappingModelWrapper")
         embedding_remapping_config = EmbeddingRemapping.load_config(cfg.model.path)
         embedding_remapping = EmbeddingRemapping(**embedding_remapping_config)
         embedding_remapping.boundaries = EmbeddingRemapping.load_boundaries(cfg.model.path)
-        model = EmbeddingRemappingModelWrapper(model, embedding_remapping)
+        if wrapper_config.get("name") == "logit_masking":
+            model = LogitMaskingModelWrapper(model, embedding_remapping, **wrapper_config.get("kwargs", {}))
+        elif wrapper_config.get("name") == "embedding_remapping":
+            model = EmbeddingRemappingModelWrapper(model, embedding_remapping)
+        else:
+            raise ValueError(f"Unknown model wrapper: {wrapper_config.get('name')}")
 
     return model, tokenizer
 
