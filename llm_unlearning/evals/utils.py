@@ -47,6 +47,8 @@ def probability(logits: torch.Tensor, labels: torch.Tensor, logprobs: bool = Fal
     sequence_losses = loss.sum(dim=-1)
     length_normalized_losses = sequence_losses / sequence_lengths
 
+    length_normalized_losses.clamp_(min=-1e5, max=1e5)
+
     if logprobs: return -length_normalized_losses
     return torch.exp(-length_normalized_losses)
 
