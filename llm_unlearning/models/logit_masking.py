@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
+
 from typing import Optional
+from collections import defaultdict
 
 from llm_unlearning.methods import EmbeddingRemapping
 
@@ -10,6 +12,9 @@ class LogitMaskingHook:
         self.masking_percentage = masking_percentage
         self.input_ids: Optional[torch.Tensor] = None
         self.layer_embeddings: Optional[torch.Tensor] = None
+        self.group = "default"
+        self.total_count = defaultdict(int)
+        self.remapped_count = defaultdict(int)
 
     def store_layer_embeddings(self, module, input, output):
         self.layer_embeddings = output[0] if isinstance(output, tuple) else output
@@ -30,8 +35,10 @@ class LogitMaskingHook:
         target_positions = question_end + 2
 
         for i in range(batch_size):
+            self.total_count[self.group] += 1
             embedding = target_embeddings[i]
             if not any(self.embedding_remapping.is_inside_boundary(embedding, boundary) for boundary in self.embedding_remapping.boundaries): continue
+            self.remapped_count[self.group] += 1
             # Mask top-N% of logits for all tokens in the sequence
             k = int(vocab_size * self.masking_percentage / 100)
             top_k_values, top_k_indices = torch.topk(logits[i], k, dim=-1)
@@ -45,7 +52,7 @@ class LogitMaskingModelWrapper(nn.Module):
         self.model = model
         self.embedding_remapping = embedding_remapping
         self.hook = LogitMaskingHook(embedding_remapping, masking_percentage)
-
+        self.group = None
         target_layer = self.model.model.layers[self.embedding_remapping.layer_id]
         target_layer.register_forward_hook(self.hook.store_layer_embeddings)
         self.model.lm_head.register_forward_hook(self.hook.mask_logits)
@@ -54,6 +61,7 @@ class LogitMaskingModelWrapper(nn.Module):
         input_ids = kwargs.get('input_ids')
         if input_ids is not None:
             self.hook.input_ids = input_ids
+        self.hook.group = self.group
         return self.model(*args, **kwargs)
 
     def generate(self, *args, **kwargs):

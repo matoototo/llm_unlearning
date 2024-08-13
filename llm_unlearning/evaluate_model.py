@@ -78,7 +78,7 @@ def evaluate_checkpoint(model: Any, tokenizer: Any, evaluation_groups: List[Dict
             **group
         })
 
-        evaluator = Evaluator(model=model, tokenizer=tokenizer, config=group_cfg)
+        evaluator = Evaluator(model=model, tokenizer=tokenizer, config=group_cfg, group_name=group['name'])
         group_results = {"metrics": {}, "aggregate_metrics": {}}
 
         for dataset_name, dataset_config in group_cfg['datasets'].items():
@@ -88,6 +88,12 @@ def evaluate_checkpoint(model: Any, tokenizer: Any, evaluation_groups: List[Dict
             group_results["metrics"][dataset_config['name']] = results
 
         checkpoint_results[group['name']] = group_results
+
+    if hasattr(model, 'hook') and hasattr(model.hook, 'total_count'):
+        checkpoint_results["remapping_stats"] = {
+            "total_count": model.hook.total_count,
+            "remapped_count": model.hook.remapped_count
+        }
 
     return checkpoint_results
 

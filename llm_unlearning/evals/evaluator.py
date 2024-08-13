@@ -7,13 +7,15 @@ from llm_unlearning.unlearning_datasets.tofu import TofuDataset
 from llm_unlearning.evals import Evaluation, all_metrics, all_aggregate_metrics
 
 class Evaluator:
-    def __init__(self, model, tokenizer, config):
+    def __init__(self, model, tokenizer, config, group_name = None):
         self.config = config
         self.tokenizer = tokenizer
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model
+        self.group_name = group_name
         if model: self.model.to(self.device)
         if model: self.model.eval()
+        if model: self.model.group = group_name
         self.metrics = {}
         self.batch_size_factors = config.get("batch_size_factors", {})
         for metric in self.config.metrics:

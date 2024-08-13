@@ -1,12 +1,16 @@
 import torch
 import torch.nn as nn
 
+from collections import defaultdict
 from llm_unlearning.methods import EmbeddingRemapping
 
 class EmbeddingRemappingHook:
     def __init__(self, embedding_remapping: EmbeddingRemapping):
         self.embedding_remapping = embedding_remapping
         self.input_ids = None
+        self.group = "default"
+        self.total_count = defaultdict(int)
+        self.remapped_count = defaultdict(int)
 
     def remap_embeddings(self, module, input, output):
         if self.input_ids is None:
@@ -19,9 +23,11 @@ class EmbeddingRemappingHook:
 
         projected_embeddings = target_embeddings.clone()
         for i, embedding in enumerate(target_embeddings):
+            self.total_count[self.group] += 1
             for boundary in self.embedding_remapping.boundaries:
                 if not self.embedding_remapping.is_inside_boundary(embedding, boundary): continue
                 projected_embeddings[i] = self.embedding_remapping.project_embedding(embedding, boundary)
+                self.remapped_count[self.group] += 1
                 break
 
         output_modified = output.clone()
@@ -38,6 +44,7 @@ class EmbeddingRemappingModelWrapper(nn.Module):
         self.model = model
         self.embedding_remapping = embedding_remapping
         self.hook = EmbeddingRemappingHook(embedding_remapping)
+        self.group = None
 
         target_layer = self.model.model.layers[self.embedding_remapping.layer_id]
         target_layer.register_forward_hook(self.hook.remap_embeddings)
@@ -46,6 +53,7 @@ class EmbeddingRemappingModelWrapper(nn.Module):
         input_ids = kwargs.get('input_ids')
         if input_ids is not None:
             self.hook.input_ids = input_ids
+        self.hook.group = self.group
         return self.model(*args, **kwargs)
 
     def generate(self, *args, **kwargs):
