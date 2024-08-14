@@ -262,7 +262,10 @@ class EmbeddingRemapping(Method):
 
     def get_target_token_embedding(self, inputs: Dict[str, torch.Tensor], layer_embedding: torch.Tensor) -> Optional[torch.Tensor]:
         # Maybe we want to do something else here? Currently it's the first non-tag answer token.
-        if 'question_length' not in inputs:
+        if inputs['input_ids'].shape[1] + 3 <= layer_embedding.shape[1]: # -> We're generating, and we generated at least 2
+            # TODO: This is evil, what's a better way to grab the token during generation?
+            question_end = torch.full_like(inputs['input_ids'][:, 0], inputs['input_ids'].size(1))
+        elif 'question_length' not in inputs:
             question_end = (inputs['input_ids'] == 33706).nonzero(as_tuple=True)[1]
         else:
             question_end = inputs['question_length'] # [..., 33706|, 25, first_token, ...] where 33706,25 is "Answer:"

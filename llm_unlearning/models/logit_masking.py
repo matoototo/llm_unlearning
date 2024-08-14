@@ -17,7 +17,11 @@ class LogitMaskingHook:
         self.remapped_count = defaultdict(int)
 
     def store_layer_embeddings(self, module, input, output):
-        self.layer_embeddings = output[0] if isinstance(output, tuple) else output
+        current_output = output[0] if isinstance(output, tuple) else output
+        if self.layer_embeddings is not None:
+            self.layer_embeddings = torch.cat((self.layer_embeddings, current_output), dim=1)
+        else:
+            self.layer_embeddings = current_output
 
     def mask_logits(self, module, input, output):
         if self.input_ids is None or self.layer_embeddings is None:
@@ -30,9 +34,6 @@ class LogitMaskingHook:
 
         if target_embeddings is None:
             return output
-
-        question_end = (self.input_ids == 33706).nonzero(as_tuple=True)[1]
-        target_positions = question_end + 2
 
         for i in range(batch_size):
             self.total_count[self.group] += 1
@@ -50,6 +51,7 @@ class LogitMaskingModelWrapper(nn.Module):
     def __init__(self, model: nn.Module, embedding_remapping: EmbeddingRemapping, masking_percentage: float = 0.1):
         super().__init__()
         self.model = model
+        self.device = model.device
         self.embedding_remapping = embedding_remapping
         self.hook = LogitMaskingHook(embedding_remapping, masking_percentage)
         self.group = None
@@ -59,10 +61,16 @@ class LogitMaskingModelWrapper(nn.Module):
 
     def forward(self, *args, **kwargs):
         input_ids = kwargs.get('input_ids')
+        self.hook.layer_embeddings = None
         if input_ids is not None:
             self.hook.input_ids = input_ids
         self.hook.group = self.group
         return self.model(*args, **kwargs)
 
     def generate(self, *args, **kwargs):
-        raise NotImplementedError
+        input_ids = kwargs.get('input_ids')
+        self.hook.layer_embeddings = None
+        if input_ids is not None:
+            self.hook.input_ids = input_ids
+        self.hook.group = self.group
+        return self.model.generate(*args, **kwargs)
