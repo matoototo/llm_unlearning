@@ -20,12 +20,12 @@ def top_k_mean_masking(logits, masking_percentage, **kwargs):
     logits.scatter_(-1, top_k_indices, mean_value.expand_as(top_k_indices))
     return logits
 
-def top_k_subtract_mean(logits, masking_percentage, **kwargs):
+def top_k_subtract_mean(logits, masking_percentage, mean_factor = 1.0, **kwargs):
     vocab_size = logits.shape[-1]
     k = int(vocab_size * masking_percentage / 100)
     top_k_values, top_k_indices = torch.topk(logits, k, dim=-1)
     mean_value = torch.mean(logits, dim=-1, keepdim=True)
-    top_k_adjusted = top_k_values - mean_value
+    top_k_adjusted = top_k_values - mean_factor * mean_value
     logits.scatter_(-1, top_k_indices, top_k_adjusted)
     return logits
 
