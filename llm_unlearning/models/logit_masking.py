@@ -1,15 +1,53 @@
 import torch
 import torch.nn as nn
-
 from typing import Optional
 from collections import defaultdict
 
 from llm_unlearning.methods import EmbeddingRemapping
 
+def top_k_masking(logits, masking_percentage, **kwargs):
+    vocab_size = logits.shape[-1]
+    k = int(vocab_size * masking_percentage / 100)
+    top_k_values, top_k_indices = torch.topk(logits, k, dim=-1)
+    logits.scatter_(-1, top_k_indices, float('-inf'))
+    return logits
+
+def top_k_mean_masking(logits, masking_percentage, **kwargs):
+    vocab_size = logits.shape[-1]
+    k = int(vocab_size * masking_percentage / 100)
+    top_k_values, top_k_indices = torch.topk(logits, k, dim=-1)
+    mean_value = torch.mean(logits, dim=-1, keepdim=True)
+    logits.scatter_(-1, top_k_indices, mean_value.expand_as(top_k_indices))
+    return logits
+
+def top_k_subtract_mean(logits, masking_percentage, **kwargs):
+    vocab_size = logits.shape[-1]
+    k = int(vocab_size * masking_percentage / 100)
+    top_k_values, top_k_indices = torch.topk(logits, k, dim=-1)
+    mean_value = torch.mean(logits, dim=-1, keepdim=True)
+    top_k_adjusted = top_k_values - mean_value
+    logits.scatter_(-1, top_k_indices, top_k_adjusted)
+    return logits
+
+def gaussian_noise(logits, sigma_scale=1.0, **kwargs):
+    max_val, _ = torch.max(logits, dim=-1, keepdim=True)
+    min_val, _ = torch.min(logits, dim=-1, keepdim=True)
+    sigma = (max_val - min_val) * sigma_scale
+    noise = torch.randn_like(logits) * sigma
+    return logits + noise
+
+STRATEGIES = {
+    "top_k_masking": top_k_masking,
+    "top_k_mean_masking": top_k_mean_masking,
+    "top_k_subtract_mean": top_k_subtract_mean,
+    "gaussian_noise": gaussian_noise,
+}
+
 class LogitMaskingHook:
-    def __init__(self, embedding_remapping: EmbeddingRemapping, masking_percentage: float):
+    def __init__(self, embedding_remapping: EmbeddingRemapping, strategy: str, **kwargs):
         self.embedding_remapping = embedding_remapping
-        self.masking_percentage = masking_percentage
+        self.strategy = STRATEGIES[strategy]
+        self.strategy_kwargs = kwargs
         self.input_ids: Optional[torch.Tensor] = None
         self.layer_embeddings: Optional[torch.Tensor] = None
         self.group = "default"
@@ -22,6 +60,9 @@ class LogitMaskingHook:
             self.layer_embeddings = torch.cat((self.layer_embeddings, current_output), dim=1)
         else:
             self.layer_embeddings = current_output
+
+    def modify_logits(self, logits):
+        return self.strategy(logits, **self.strategy_kwargs)
 
     def mask_logits(self, module, input, output):
         if self.input_ids is None or self.layer_embeddings is None:
@@ -38,22 +79,20 @@ class LogitMaskingHook:
         for i in range(batch_size):
             self.total_count[self.group] += 1
             embedding = target_embeddings[i]
-            if not any(self.embedding_remapping.is_inside_boundary(embedding, boundary) for boundary in self.embedding_remapping.boundaries): continue
+            if not any(self.embedding_remapping.is_inside_boundary(embedding, boundary) for boundary in self.embedding_remapping.boundaries):
+                continue
             self.remapped_count[self.group] += 1
-            # Mask top-N% of logits for all tokens in the sequence
-            k = int(vocab_size * self.masking_percentage / 100)
-            top_k_values, top_k_indices = torch.topk(logits[i], k, dim=-1)
-            logits[i].scatter_(1, top_k_indices, float('-inf'))
+            logits[i] = self.modify_logits(logits[i])
 
         return logits if not isinstance(output, tuple) else (logits, *output[1:])
 
 class LogitMaskingModelWrapper(nn.Module):
-    def __init__(self, model: nn.Module, embedding_remapping: EmbeddingRemapping, masking_percentage: float = 0.1):
+    def __init__(self, model: nn.Module, embedding_remapping: EmbeddingRemapping, strategy: str = "top_k_masking", **kwargs):
         super().__init__()
         self.model = model
         self.device = model.device
         self.embedding_remapping = embedding_remapping
-        self.hook = LogitMaskingHook(embedding_remapping, masking_percentage)
+        self.hook = LogitMaskingHook(embedding_remapping, strategy, **kwargs)
         self.group = None
         target_layer = self.model.model.layers[self.embedding_remapping.layer_id]
         target_layer.register_forward_hook(self.hook.store_layer_embeddings)
