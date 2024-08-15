@@ -25,12 +25,24 @@ class TofuDataset(Dataset):
         try:
             dataset = datasets.load_dataset("locuslab/TOFU", split)["train"]
         except ValueError:
+            if split.startswith("full"):
+                suffix = int(split[4:])
+                forget_set = f"forget{suffix}"
+                retain_set = f"retain{100-suffix}"
+                forget_data = self._create_custom_split(forget_set)
+                retain_data = self._create_custom_split(retain_set)
+                if not part: return datasets.concatenate_datasets([forget_data, retain_data])
+                f_ind = [i for i in range(len(forget_data))]
+                f_ind = f_ind[:len(forget_data) // 2] if int(part) == 0 else f_ind[len(forget_data) // 2:]
+                r_ind = [i for i in range(len(retain_data))]
+                r_ind = r_ind[:len(retain_data) // 2] if int(part) == 0 else r_ind[len(retain_data) // 2:]
+                return datasets.concatenate_datasets([forget_data.select(f_ind), retain_data.select(r_ind)])
+
             dataset = self._create_custom_split(split)
         if not part: return dataset
         indices = [i for i in range(len(dataset))]
         indices = indices[:len(dataset) // 2] if int(part) == 0 else indices[len(dataset) // 2:]
         return dataset.select(indices)
-
 
     def _create_custom_split(self, split):
         full_data = datasets.load_dataset("locuslab/TOFU", "full")["train"]
