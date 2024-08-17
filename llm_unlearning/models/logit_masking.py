@@ -3,7 +3,7 @@ import torch.nn as nn
 from typing import Optional
 from collections import defaultdict
 
-from llm_unlearning.methods import EmbeddingRemapping
+from llm_unlearning.methods import EmbeddingBoundary
 
 def top_k_masking(logits, masking_percentage, **kwargs):
     vocab_size = logits.shape[-1]
@@ -44,15 +44,15 @@ STRATEGIES = {
 }
 
 class LogitMaskingHook:
-    def __init__(self, embedding_remapping: EmbeddingRemapping, strategy: str, **kwargs):
-        self.embedding_remapping = embedding_remapping
+    def __init__(self, embedding_boundary: EmbeddingBoundary, strategy: str, **kwargs):
+        self.embedding_boundary = embedding_boundary
         self.strategy = STRATEGIES[strategy]
         self.strategy_kwargs = kwargs
         self.input_ids: Optional[torch.Tensor] = None
         self.layer_embeddings: Optional[torch.Tensor] = None
         self.group = "default"
         self.total_count = defaultdict(int)
-        self.remapped_count = defaultdict(int)
+        self.inside_boundary_count = defaultdict(int)
 
     def store_layer_embeddings(self, module, input, output):
         current_output = output[0] if isinstance(output, tuple) else output
@@ -71,7 +71,7 @@ class LogitMaskingHook:
         logits = output[0] if isinstance(output, tuple) else output
         batch_size, seq_length, vocab_size = logits.shape
 
-        target_embeddings = self.embedding_remapping.get_target_token_embedding({'input_ids': self.input_ids}, self.layer_embeddings)
+        target_embeddings = self.embedding_boundary.get_target_token_embedding({'input_ids': self.input_ids}, self.layer_embeddings)
 
         if target_embeddings is None:
             return output
@@ -79,22 +79,22 @@ class LogitMaskingHook:
         for i in range(batch_size):
             self.total_count[self.group] += 1
             embedding = target_embeddings[i]
-            if not any(self.embedding_remapping.is_inside_boundary(embedding, boundary) for boundary in self.embedding_remapping.boundaries):
+            if not any(self.embedding_boundary.is_inside_boundary(embedding, boundary) for boundary in self.embedding_boundary.boundaries):
                 continue
-            self.remapped_count[self.group] += 1
+            self.inside_boundary_count[self.group] += 1
             logits[i] = self.modify_logits(logits[i])
 
         return logits if not isinstance(output, tuple) else (logits, *output[1:])
 
 class LogitMaskingModelWrapper(nn.Module):
-    def __init__(self, model: nn.Module, embedding_remapping: EmbeddingRemapping, strategy: str = "top_k_masking", **kwargs):
+    def __init__(self, model: nn.Module, embedding_boundary: EmbeddingBoundary, strategy: str = "top_k_masking", **kwargs):
         super().__init__()
         self.model = model
         self.device = model.device
-        self.embedding_remapping = embedding_remapping
-        self.hook = LogitMaskingHook(embedding_remapping, strategy, **kwargs)
+        self.embedding_boundary = embedding_boundary
+        self.hook = LogitMaskingHook(embedding_boundary, strategy, **kwargs)
         self.group = None
-        target_layer = self.model.model.layers[self.embedding_remapping.layer_id]
+        target_layer = self.model.model.layers[self.embedding_boundary.layer_id]
         target_layer.register_forward_hook(self.hook.store_layer_embeddings)
         self.model.lm_head.register_forward_hook(self.hook.mask_logits)
 

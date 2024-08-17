@@ -10,7 +10,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from llm_unlearning.evals.evaluator import Evaluator
 from llm_unlearning.unlearning_datasets import TofuDataset
-from llm_unlearning.methods import EmbeddingRemapping
+from llm_unlearning.methods import EmbeddingBoundary
 from llm_unlearning.models import load_model_and_tokenizer, EmbeddingRemappingModelWrapper, LogitMaskingModelWrapper
 
 def get_checkpoint_paths(cfg: DictConfig) -> List[str]:
@@ -53,14 +53,14 @@ def load_model_for_evaluation(cfg: DictConfig, checkpoint_path: str) -> Tuple[An
 
     wrapper_config = cfg.get("wrapper", {})
     if wrapper_config and os.path.exists(os.path.join(cfg.model.path, "embedding_boundaries.pt")):
-        print("Loading embedding remapping boundaries, wrapping model with EmbeddingRemappingModelWrapper")
-        embedding_remapping_config = EmbeddingRemapping.load_config(cfg.model.path)
-        embedding_remapping = EmbeddingRemapping(**embedding_remapping_config)
-        embedding_remapping.boundaries = EmbeddingRemapping.load_boundaries(cfg.model.path)
+        print("Loading embedding boundaries, wrapping model with EmbeddingRemappingModelWrapper")
+        embedding_boundary_config = EmbeddingBoundary.load_config(cfg.model.path)
+        embedding_boundary = EmbeddingBoundary(**embedding_boundary_config)
+        embedding_boundary.boundaries = EmbeddingBoundary.load_boundaries(cfg.model.path)
         if wrapper_config.get("name") == "logit_masking":
-            model = LogitMaskingModelWrapper(model, embedding_remapping, **wrapper_config.get("kwargs", {}))
+            model = LogitMaskingModelWrapper(model, embedding_boundary, **wrapper_config.get("kwargs", {}))
         elif wrapper_config.get("name") == "embedding_remapping":
-            model = EmbeddingRemappingModelWrapper(model, embedding_remapping)
+            model = EmbeddingRemappingModelWrapper(model, embedding_boundary)
         else:
             raise ValueError(f"Unknown model wrapper: {wrapper_config.get('name')}")
 
@@ -90,9 +90,9 @@ def evaluate_checkpoint(model: Any, tokenizer: Any, evaluation_groups: List[Dict
         checkpoint_results[group['name']] = group_results
 
     if hasattr(model, 'hook') and hasattr(model.hook, 'total_count'):
-        checkpoint_results["remapping_stats"] = {
+        checkpoint_results["boundary_stats"] = {
             "total_count": model.hook.total_count,
-            "remapped_count": model.hook.remapped_count
+            "inside_boundary_count": model.hook.inside_boundary_count
         }
 
     return checkpoint_results

@@ -230,7 +230,7 @@ class RMU(Method):
 
         return total_loss, loss_dict, (forget_activations, retain_activations)
 
-class EmbeddingRemapping(Method):
+class EmbeddingBoundary(Method):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.alpha = kwargs.get('alpha', 0.001)
@@ -432,7 +432,7 @@ class EmbeddingRemapping(Method):
             "alpha": self.alpha,
             "boundary_type": self.boundary_type,
         }
-        config_path = os.path.join(save_directory, "embedding_remapping_config.yaml")
+        config_path = os.path.join(save_directory, "embedding_boundary_config.yaml")
         OmegaConf.save(config, config_path)
 
     def save_boundaries(self, save_directory: str):
@@ -442,7 +442,7 @@ class EmbeddingRemapping(Method):
 
     @classmethod
     def load_config(cls, load_directory: str):
-        config_path = os.path.join(load_directory, "embedding_remapping_config.yaml")
+        config_path = os.path.join(load_directory, "embedding_boundary_config.yaml")
         if os.path.exists(config_path):
             return OmegaConf.load(config_path)
         raise FileNotFoundError(f"Config file not found at {config_path}")
@@ -463,7 +463,7 @@ def get_method(method_name: str, **kwargs) -> Method:
         "gradient_difference": GradientDifference,
         "npo": NPO,
         "rmu": RMU,
-        "embedding_remapping": EmbeddingRemapping,
+        "embedding_boundary": EmbeddingBoundary,
     }
 
     if method_name not in methods:
