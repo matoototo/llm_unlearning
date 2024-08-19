@@ -32,17 +32,29 @@ class TofuDataset(Dataset):
                 forget_data = self._create_custom_split(forget_set)
                 retain_data = self._create_custom_split(retain_set)
                 if not part: return datasets.concatenate_datasets([forget_data, retain_data])
-                f_ind = [i for i in range(len(forget_data))]
-                f_ind = f_ind[:len(forget_data) // 2] if int(part) == 0 else f_ind[len(forget_data) // 2:]
-                r_ind = [i for i in range(len(retain_data))]
-                r_ind = r_ind[:len(retain_data) // 2] if int(part) == 0 else r_ind[len(retain_data) // 2:]
-                return datasets.concatenate_datasets([forget_data.select(f_ind), retain_data.select(r_ind)])
 
+                f_ind = self._part_indices(forget_data, int(part), is_forget=True)
+                r_ind = self._part_indices(retain_data, int(part), is_forget=False)
+                return datasets.concatenate_datasets([forget_data.select(f_ind), retain_data.select(r_ind)])
             dataset = self._create_custom_split(split)
         if not part: return dataset
-        indices = [i for i in range(len(dataset))]
-        indices = indices[:len(dataset) // 2] if int(part) == 0 else indices[len(dataset) // 2:]
+        indices = self._part_indices(dataset, int(part), split.startswith("forget"))
         return dataset.select(indices)
+
+    def _part_indices(self, dataset, part, is_forget):
+        indices = [i for i in range(len(dataset))]
+        # For forget sets larger than forget10, we need to split the last 400 evenly between the part_0 and part_1, this
+        # ensures that forget10_perturbed is evenly represented in both train and val, we don't have larger perturbed splits
+        # Likewise for retain, if it's smaller than retain90 then the first 400 should be split evenly (retain_perturbed)
+        if is_forget and len(indices) <= 400:
+            return indices[:len(indices) // 2] if part == 0 else indices[len(indices) // 2:]
+        if not is_forget and len(indices) >= 3600:
+            return indices[:len(indices) // 2] if part == 0 else indices[len(indices) // 2:]
+        common_indices = indices[-400:] if is_forget else indices[:400]
+        indices = indices[:-400] if is_forget else indices[400:] # Remove the common indices
+        part_0 = common_indices[:200] + indices[:len(indices) // 2]
+        part_1 = common_indices[200:] + indices[len(indices) // 2:]
+        return part_0 if part == 0 else part_1
 
     def _create_custom_split(self, split):
         full_data = datasets.load_dataset("locuslab/TOFU", "full")["train"]
