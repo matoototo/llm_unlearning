@@ -43,7 +43,10 @@ def main(cfg: DictConfig) -> None:
     unlearn_cfg = cfg
     script_dir = os.path.dirname(os.path.abspath(__file__))
     config_dir = os.path.join(script_dir, "configs")
+
     eval_config_path = os.path.join(config_dir, cfg.evaluate_config)
+    # if we provided a full path, use that instead
+    if os.path.exists(cfg.evaluate_config): eval_config_path = cfg.evaluate_config
 
     if not os.path.exists(eval_config_path):
         raise FileNotFoundError(f"Evaluate config file not found: {eval_config_path}")
@@ -59,7 +62,8 @@ def main(cfg: DictConfig) -> None:
 
     if finetune_needed:
         print("\nRetain model not found or finetune_again is set. Starting finetuning process.")
-        finetune_cfg = OmegaConf.load(os.path.join(config_dir, cfg.finetune_config))
+        if os.path.exists(cfg.finetune_config): finetune_cfg = OmegaConf.load(cfg.finetune_config)
+        else: finetune_cfg = OmegaConf.load(os.path.join(config_dir, cfg.finetune_config))
         retain_model_path = run_finetune(finetune_cfg)
         eval_cfg.model.retain_path = retain_model_path
         eval_cfg.model.retain_tokenizer_path = retain_model_path
