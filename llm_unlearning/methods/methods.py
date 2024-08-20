@@ -236,6 +236,7 @@ class EmbeddingBoundary(Method):
         self.alpha = kwargs.get('alpha', 0.001)
         self.layer_id = kwargs.get("layer_id", 5)
         self.epsilon = kwargs.get("epsilon", 0.01)
+        self.normalise_epsilon = kwargs.get("normalise_epsilon", False)
         self.num_at_supports = kwargs.get("num_at_supports", 10)
         assert self.num_at_supports > 1, "Number of adversarial supports must be greater than 1"
         self.boundary_type = kwargs.get("boundary_type", "epsilon_ball")
@@ -279,11 +280,12 @@ class EmbeddingBoundary(Method):
         original_embeddings = model.get_input_embeddings()(input_ids)
         layer_embeddings = self.get_layer_embedding(model, inputs)
         target_token_embeddings = [self.get_target_token_embedding(inputs, layer_embeddings)]
+        epsilon = self._epsilon(original_embeddings)
 
         for _outer in range(self.num_at_supports - 1):
             random_direction = torch.rand_like(original_embeddings)
             random_direction = F.normalize(random_direction, dim=-1)
-            perturbed_embeddings = original_embeddings.clone().detach() + self.epsilon * random_direction
+            perturbed_embeddings = original_embeddings.clone().detach() + epsilon * random_direction
 
             for _inner in range(self.num_inner_at_iterations):
                 perturbed_embeddings.requires_grad = True
@@ -301,7 +303,7 @@ class EmbeddingBoundary(Method):
                     # TODO: Do we want to perturb the full sequence embedding or just the target token?
                     grad = perturbed_embeddings.grad
                     perturbed_embeddings = perturbed_embeddings + self.alpha * grad.sign()
-                    delta = self.project_l2(perturbed_embeddings - original_embeddings)
+                    delta = self.project_l2(perturbed_embeddings - original_embeddings, epsilon)
                     perturbed_embeddings = (original_embeddings + delta).detach()
 
             layer_embedding = self.get_layer_embedding(model, {'inputs_embeds': perturbed_embeddings, 'attention_mask': attention_mask})
@@ -310,10 +312,15 @@ class EmbeddingBoundary(Method):
 
         return target_token_embeddings
 
-    def project_l2(self, delta):
+    def _epsilon(self, embeddings: torch.Tensor) -> torch.Tensor:
+        if self.normalise_epsilon:
+            return self.epsilon * embeddings.norm(p=2, dim=-1).mean().item()
+        return self.epsilon
+
+    def project_l2(self, delta, epsilon):
         norm = delta.norm(p=2, dim=-1, keepdim=True)
-        mask = norm > self.epsilon
-        return torch.where(mask, delta * self.epsilon / norm, delta)
+        mask = norm > epsilon
+        return torch.where(mask, delta * epsilon / norm, delta)
 
     def fit_boundary(self, embeddings: List[torch.Tensor]) -> Any:
         if self.boundary_type == "epsilon_ball":
