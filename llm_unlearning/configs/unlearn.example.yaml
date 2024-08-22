@@ -6,6 +6,13 @@ base_dataset: &base_dataset
     answer_tag: "Answer: "
     question_key: "question"
     answer_key: "answer"
+    use_dynamic_labels: false
+    generation_config:
+        do_sample: true
+        temperature: 1.5
+        top_p: 0.95
+        top_k: 100
+        batch_size: 64
 
 model:
     path: "locuslab/tofu_ft_phi-1.5"
@@ -21,9 +28,11 @@ dataset:
     forget:
         <<: *base_dataset
         split: "forget10"
+        use_dynamic_labels: true
     retain:
         <<: *base_dataset
         split: "retain90"
+        use_dynamic_labels: false
 
 unlearning:
     method: "npo"
@@ -42,8 +51,8 @@ training_arguments:
     output_dir: ${output_dir}
     num_train_epochs: 10
     weight_decay: 0.01
-    per_device_train_batch_size: 4
-    gradient_accumulation_steps: 8
+    per_device_train_batch_size: 2
+    gradient_accumulation_steps: 16
     warmup_ratio: 0.1
     logging_dir: ${output_dir}/logs
     logging_steps: 10

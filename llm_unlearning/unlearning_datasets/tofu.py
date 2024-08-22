@@ -1,15 +1,16 @@
 import torch
 from torch.utils.data import Dataset
 import datasets
-from transformers import PreTrainedTokenizer
-from typing import Dict, List
-from omegaconf import DictConfig
+from transformers import PreTrainedTokenizer, PreTrainedModel
+from typing import Dict, List, Optional
+from omegaconf import DictConfig, OmegaConf
 
 class TofuDataset(Dataset):
     def __init__(
         self,
         tokenizer: PreTrainedTokenizer,
         config: DictConfig,
+        model: Optional[PreTrainedModel] = None,
     ):
         super().__init__()
         self.tokenizer = tokenizer
@@ -17,6 +18,11 @@ class TofuDataset(Dataset):
         self.max_length = config.max_length
         self.split = config.split
         self.data = self._load_split()
+        self.model = model
+        self.generation_config = config.get("generation_config", {})
+        self.use_dynamic_labels = config.get("use_dynamic_labels", False)
+        self.current_epoch = 0
+        self.dynamic_data = None
 
     def _load_split(self):
         part = None
@@ -72,6 +78,8 @@ class TofuDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        if self.use_dynamic_labels and self.dynamic_data is not None:
+            return self._process_item(self.dynamic_data[idx])
         return self._process_item(self.data[idx])
 
     def _process_item(self, item: Dict) -> Dict[str, torch.Tensor]:
@@ -140,6 +148,54 @@ class TofuDataset(Dataset):
             "labels": labels,
             "question_length": torch.tensor(question_length)
         }
+
+    def _generate_answers_batch(self, questions: List[str]) -> List[str]:
+        if self.model is None:
+            raise ValueError("Model is not set. Cannot generate dynamic labels.")
+
+        # doesn't support pop, have to do this garbage
+        self.generation_config = OmegaConf.to_container(self.generation_config, resolve=True)
+        batch_size = self.generation_config.pop("batch_size", 8)
+        self.generation_config = OmegaConf.create(self.generation_config)
+
+        # temporarily set padding side to left
+        self.tokenizer.padding_side = "left"
+
+        all_answers = []
+        for i in range(0, len(questions), batch_size):
+            batch_questions = questions[i:i+batch_size]
+            input_texts = [f"{self.config.question_start_tag}{q}{self.config.question_end_tag}" for q in batch_questions]
+            inputs = self.tokenizer(input_texts, return_tensors="pt", padding=True, truncation=True).to(self.model.device)
+
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_length=self.max_length,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                    **self.generation_config
+                )
+
+            decoded_outputs = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            batch_answers = [output.split(self.config.question_end_tag)[-1].strip() for output in decoded_outputs]
+            all_answers.extend(batch_answers)
+
+        self.tokenizer.padding_side = "right"
+        return all_answers
+
+    def set_epoch(self, epoch: int):
+        if int(epoch) == int(self.current_epoch): return
+        self.current_epoch = epoch
+        if not self.use_dynamic_labels: return
+
+        questions = [item[self.config.question_key] for item in self.data]
+        generated_answers = self._generate_answers_batch(questions)
+
+        self.dynamic_data = []
+        for item, new_answer in zip(self.data, generated_answers):
+            new_item = item.copy()
+            new_item[self.config.answer_key] = new_answer[8:]  # Strip away "Answer: " prefix
+            self.dynamic_data.append(new_item)
 
     @staticmethod
     def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
@@ -219,6 +275,16 @@ def get_tofu_dataset(
                 "forget_inputs": forget_item,
                 "retain_inputs": retain_item
             }
+
+        def set_epoch(self, epoch):
+            self.forget_dataset.set_epoch(epoch)
+            if self.retain_dataset is not None:
+                self.retain_dataset.set_epoch(epoch)
+
+        def set_model(self, model):
+            self.forget_dataset.model = model
+            if self.retain_dataset is not None:
+                self.retain_dataset.model = model
 
         @staticmethod
         def collate_fn(batch: List[Dict]) -> Dict[str, Dict[str, torch.Tensor]]:

@@ -62,6 +62,7 @@ class UnlearningTrainer(Trainer):
             prehook(self, model, inputs)
 
         if hasattr(self.train_dataset, 'set_epoch'):
+            self.train_dataset.set_model(model)
             self.train_dataset.set_epoch(self.state.epoch)
 
         out = super().training_step(model, inputs)
