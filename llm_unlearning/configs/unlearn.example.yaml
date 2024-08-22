@@ -20,10 +20,10 @@ dataset:
     name: "tofu"
     forget:
         <<: *base_dataset
-        split: "forget10:0"
+        split: "forget10"
     retain:
         <<: *base_dataset
-        split: "retain90:0"
+        split: "retain90"
 
 unlearning:
     method: "npo"

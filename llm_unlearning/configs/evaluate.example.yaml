@@ -38,7 +38,7 @@ evaluation_groups:
       tofu_forget:
         <<: *tofu_base
         name: "tofu_forget"
-        split: "forget10_perturbed:0"
+        split: "forget10_perturbed"
     metrics:
       - truth_ratio
     batch_size_factors:
@@ -52,7 +52,7 @@ evaluation_groups:
       tofu_retain:
         <<: *tofu_base
         name: "tofu_retain"
-        split: "retain_perturbed:0"
+        split: "retain_perturbed"
       real_authors:
         <<: *tofu_base
         name: "real_authors"

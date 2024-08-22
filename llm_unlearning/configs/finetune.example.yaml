@@ -15,7 +15,7 @@ dataset:
     name: "tofu"
     forget:
         <<: *base_dataset
-        split: "retain90:0"
+        split: "retain90"
 
 unlearning:
     method: "gradient_descent"
