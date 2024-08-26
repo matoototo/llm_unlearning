@@ -21,6 +21,7 @@ class TofuDataset(Dataset):
         self.model = model
         self.generation_config = config.get("generation_config", {})
         self.use_dynamic_labels = config.get("use_dynamic_labels", False)
+        self.regenerate_every = config.get("regenerate_every", 1)
         self.current_epoch = 0
         self.dynamic_data = None
 
@@ -183,10 +184,13 @@ class TofuDataset(Dataset):
         self.tokenizer.padding_side = "right"
         return all_answers
 
-    def set_epoch(self, epoch: int):
-        if int(epoch) == int(self.current_epoch): return
+    def set_epoch(self, epoch: float):
+        epoch = int(epoch)
+        should_regenerate = epoch % self.regenerate_every == 0 and epoch != self.current_epoch
         self.current_epoch = epoch
         if not self.use_dynamic_labels: return
+
+        if not should_regenerate and self.dynamic_data is not None: return
 
         questions = [item[self.config.question_key] for item in self.data]
         generated_answers = self._generate_answers_batch(questions)

@@ -35,6 +35,7 @@ dataset:
         <<: *base_dataset
         split: "forget10"
         use_dynamic_labels: true
+        regenerate_every: 2
 
 unlearning:
     method: "npo"
