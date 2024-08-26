@@ -1,6 +1,6 @@
 base_dataset: &base_dataset
     path: "locuslab/TOFU"
-    max_length: 512
+    max_length: 128
     question_start_tag: "Question: "
     question_end_tag: "\n"
     answer_tag: "Answer: "
@@ -28,11 +28,13 @@ dataset:
     forget:
         <<: *base_dataset
         split: "forget10"
-        use_dynamic_labels: true
     retain:
         <<: *base_dataset
         split: "retain90"
-        use_dynamic_labels: false
+    dynamic:
+        <<: *base_dataset
+        split: "forget10"
+        use_dynamic_labels: true
 
 unlearning:
     method: "npo"
@@ -45,7 +47,7 @@ unlearning:
         #     time_scale: 0.8     # over the first 25% steps
     # adversarial_attack: "pgd"
 
-output_dir: ./results/${unlearning.method}/${dataset.forget.split}_beta_${unlearning.kwargs.beta}_attack_${unlearning.adversarial_attack}
+output_dir: ./results/${unlearning.method}/${dataset.forget.split}_beta_${unlearning.kwargs.beta}
 
 training_arguments:
     output_dir: ${output_dir}

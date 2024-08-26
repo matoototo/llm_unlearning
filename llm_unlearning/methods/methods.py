@@ -24,6 +24,7 @@ class Method:
         self.schedules = {}
         self.original_values = {}
         self.register_scheduled_values(kwargs)
+        self.use_dynamic = kwargs.get("use_dynamic", False)
 
     def setup(self, **kwargs):
         pass
@@ -46,6 +47,24 @@ class Method:
             original_value = self.original_values[name]
             setattr(self, name, schedule(step_ratio) * original_value)
 
+    def get_inputs(self, **kwargs):
+        forget_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
+        retain_inputs = {k: v for k, v in kwargs.get('retain_inputs', {}).items() if k in self.input_keys}
+        dynamic_inputs = {k: v for k, v in kwargs.get('dynamic_inputs', {}).items() if k in self.input_keys} if self.use_dynamic else None
+        return forget_inputs, retain_inputs, dynamic_inputs
+
+    def get_forget_outputs(self, model: PreTrainedModel, forget_inputs: Dict[str, torch.Tensor], dynamic_inputs: Optional[Dict[str, torch.Tensor]] = None) -> Tuple[torch.Tensor, torch.Tensor, Any]:
+        with torch.set_grad_enabled(not self.use_dynamic):
+            forget_outputs = model(**forget_inputs)
+            forget_loss = forget_outputs.loss
+
+        if self.use_dynamic and dynamic_inputs is not None:
+            dynamic_outputs = model(**dynamic_inputs)
+            dynamic_loss = dynamic_outputs.loss
+            return dynamic_loss, forget_loss, (forget_outputs, dynamic_outputs)
+        else:
+            return forget_loss, forget_loss, forget_outputs
+
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         raise NotImplementedError("Subclasses must implement this method")
 
@@ -57,53 +76,53 @@ class Method:
 
 class GradientDescent(Method):
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
-        check_inputs(["forget_inputs"], **kwargs)
+        check_inputs(["forget_inputs"] if not self.use_dynamic else ["forget_inputs", "dynamic_inputs"], **kwargs)
         self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
 
-        ft_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
-        outputs = model(**ft_inputs)
-        loss_ft = outputs.loss
+        forget_inputs, _, dynamic_inputs = self.get_inputs(**kwargs)
+        loss, forget_loss, outputs = self.get_forget_outputs(model, forget_inputs, dynamic_inputs)
 
         loss_dict = {
-            "loss_ft": loss_ft.item(),
+            "forget_loss": forget_loss.item(),
+            "dynamic_loss": loss.item() if self.use_dynamic else 0,
         }
 
-        return loss_ft, loss_dict, outputs
+        return loss, loss_dict, outputs
 
 class GradientAscent(Method):
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
-        check_inputs(["forget_inputs"], **kwargs)
+        check_inputs(["forget_inputs"] if not self.use_dynamic else ["forget_inputs", "dynamic_inputs"], **kwargs)
         self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
 
-        forget_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
-        outputs = model(**forget_inputs)
-        forget_loss = outputs.loss * -1
+        forget_inputs, _, dynamic_inputs = self.get_inputs(**kwargs)
+        loss, forget_loss, outputs = self.get_forget_outputs(model, forget_inputs, dynamic_inputs)
+        loss, forget_loss = -loss, -forget_loss
 
         loss_dict = {
-            "loss_forget": forget_loss.item(),
+            "forget_loss": forget_loss.item(),
+            "dynamic_loss": loss.item() if self.use_dynamic else 0,
         }
 
-        return forget_loss, loss_dict, outputs
+        return loss, loss_dict, outputs
 
 class GradientDifference(Method):
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
-        check_inputs(["forget_inputs", "retain_inputs"], **kwargs)
+        check_inputs(["forget_inputs", "retain_inputs"] if not self.use_dynamic else ["forget_inputs", "retain_inputs", "dynamic_inputs"], **kwargs)
         self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
 
-        forget_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
-        retain_inputs = {k: v for k, v in kwargs['retain_inputs'].items() if k in self.input_keys}
-
-        forget_outputs = model(**forget_inputs)
-        forget_loss = forget_outputs.loss * -1
+        forget_inputs, retain_inputs, dynamic_inputs = self.get_inputs(**kwargs)
+        loss, forget_loss_for_logging, forget_outputs = self.get_forget_outputs(model, forget_inputs, dynamic_inputs)
+        loss = -loss
 
         retain_outputs = model(**retain_inputs)
         retain_loss = retain_outputs.loss
 
-        total_loss = forget_loss + retain_loss
+        total_loss = loss + retain_loss
 
         loss_dict = {
-            "loss_forget": forget_loss.item(),
-            "loss_retain": retain_loss.item(),
+            "forget_loss": forget_loss_for_logging.item(),
+            "retain_loss": retain_loss.item(),
+            "dynamic_loss": loss.item() if self.use_dynamic else 0,
         }
 
         return total_loss, loss_dict, (forget_outputs, retain_outputs)
@@ -116,37 +135,37 @@ class NPO(Method):
         super().__init__(**kwargs)
 
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
-        check_inputs(["forget_inputs", "retain_inputs"], **kwargs)
+        check_inputs(["forget_inputs", "retain_inputs"] if not self.use_dynamic else ["forget_inputs", "retain_inputs", "dynamic_inputs"], **kwargs)
         self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
-        reference_model = kwargs.get("reference_model") if "reference_model" in kwargs else None
-        if not reference_model: raise ValueError("NPO requires a config.reference_model to be set")
+        reference_model = kwargs.get("reference_model")
+        if not reference_model:
+            raise ValueError("NPO requires a config.reference_model to be set")
 
-        forget_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
+        forget_inputs, retain_inputs, dynamic_inputs = self.get_inputs(**kwargs)
+        loss, forget_loss_for_logging, forget_outputs = self.get_forget_outputs(model, forget_inputs, dynamic_inputs)
 
-        forget_outputs = model(**forget_inputs)
-        forget_loss = sequence_nll(forget_outputs.logits, forget_inputs["labels"])
         with torch.no_grad():
             reference_outputs = reference_model(**forget_inputs)
             reference_loss = sequence_nll(reference_outputs.logits, forget_inputs["labels"])
 
-        neg_logloss_ratio = (forget_loss - reference_loss)
+        neg_logloss_ratio = (loss - reference_loss)
         npo_loss = (F.logsigmoid(self.beta * neg_logloss_ratio) * -2 / self.beta).mean()
-        loss = npo_loss
+        total_loss = npo_loss
 
         if self.retain_coeff:
-            retain_inputs = {k: v for k, v in kwargs['retain_inputs'].items() if k in self.input_keys}
             retain_outputs = model(**retain_inputs)
             retain_loss = retain_outputs.loss
-            loss += self.retain_coeff * retain_loss
+            total_loss += self.retain_coeff * retain_loss
 
         loss_dict = {
             "npo_loss": npo_loss.item(),
-            "forget_loss": forget_loss.mean().item(),
+            "forget_loss": forget_loss_for_logging.item(),
             "reference_loss": reference_loss.mean().item(),
             "retain_loss": retain_loss.item() if self.retain_coeff else 0,
+            "dynamic_loss": loss.item() if self.use_dynamic else 0,
         }
 
-        return loss, loss_dict, (forget_outputs, reference_outputs)
+        return total_loss, loss_dict, (forget_outputs, reference_outputs)
 
 class RMU(Method):
     # https://arxiv.org/abs/2403.03218
@@ -202,8 +221,7 @@ class RMU(Method):
         reference_model = kwargs.get("reference_model") if "reference_model" in kwargs else None
         if not reference_model: raise ValueError("RMU requires a config.reference_model to be set")
 
-        forget_inputs = {k: v for k, v in kwargs['forget_inputs'].items() if k in self.input_keys}
-        retain_inputs = {k: v for k, v in kwargs['retain_inputs'].items() if k in self.input_keys}
+        forget_inputs, retain_inputs, _ = self.get_inputs(**kwargs)
 
         # Control vector is kept the same throughout unlearning
         if self.control_vec is None:
@@ -252,7 +270,6 @@ class EmbeddingBoundary(Method):
 
         layer = model.model.layers[self.layer_id]
         handle = layer.register_forward_hook(hook_fn)
-
 
         valid_inputs = {k: v for k, v in inputs.items() if k in self.input_keys}
         with torch.set_grad_enabled(with_grad):
@@ -395,8 +412,7 @@ class EmbeddingBoundary(Method):
         check_inputs(["forget_inputs", "retain_inputs"], **kwargs)
         self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
 
-        forget_inputs = kwargs['forget_inputs']
-        retain_inputs = kwargs['retain_inputs']
+        forget_inputs, retain_inputs, _ = self.get_inputs(**kwargs)
 
         # Perform adversarial search for each item in the batch TODO: Parallelize
         all_forget_embeddings = []
