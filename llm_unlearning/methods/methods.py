@@ -106,16 +106,21 @@ class GradientAscent(Method):
         return loss, loss_dict, outputs
 
 class GradientDifference(Method):
+    def __init__(self, **kwargs):
+        self.forget_coeff = kwargs.get("forget_coeff", -1.0)
+        self.retain_coeff = kwargs.get("retain_coeff", 1.0)
+        super().__init__(**kwargs)
+
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs", "retain_inputs"] if not self.use_dynamic else ["forget_inputs", "retain_inputs", "dynamic_inputs"], **kwargs)
         self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
 
         forget_inputs, retain_inputs, dynamic_inputs = self.get_inputs(**kwargs)
         loss, forget_loss_for_logging, forget_outputs = self.get_forget_outputs(model, forget_inputs, dynamic_inputs)
-        loss = -loss
+        loss = loss * self.forget_coeff
 
         retain_outputs = model(**retain_inputs)
-        retain_loss = retain_outputs.loss
+        retain_loss = retain_outputs.loss * self.retain_coeff
 
         total_loss = loss + retain_loss
 
