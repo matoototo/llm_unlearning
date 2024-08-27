@@ -4,6 +4,7 @@ import json
 import hydra
 import torch
 import shutil
+import wandb
 
 from typing import List, Dict, Any, Tuple
 from omegaconf import DictConfig, OmegaConf
@@ -105,20 +106,30 @@ def delete_checkpoint(checkpoint_path: str):
     else:
         print(f"Checkpoint not found: {checkpoint_path}")
 
-@hydra.main(config_path="configs", config_name="evaluate", version_base=None)
-def main(cfg: DictConfig) -> None:
+def evaluate_with_config(cfg: DictConfig, wandb_run: wandb.sdk.wandb_run.Run = None) -> None:
     print(OmegaConf.to_yaml(cfg))
 
     checkpoint_paths = get_checkpoint_paths(cfg)
     all_results = {}
+    wandb_log_data = {}
 
     for checkpoint_path in checkpoint_paths:
         checkpoint_name = os.path.basename(checkpoint_path)
+        checkpoint_number = int(checkpoint_name.split('-')[-1]) if checkpoint_name != "retain" else -1
         print(f"\nEvaluating {checkpoint_name}")
 
         model, tokenizer = load_model_for_evaluation(cfg, checkpoint_path)
         checkpoint_results = evaluate_checkpoint(model, tokenizer, cfg.evaluation_groups, cfg)
         all_results[checkpoint_name] = checkpoint_results
+
+        for group_name, group_results in checkpoint_results.items():
+            for dataset_name, dataset_metrics in group_results['metrics'].items():
+                for metric_name, metric_value in dataset_metrics.items():
+                    if not metric_name.endswith('_metadata'):
+                        metric_key = f"{group_name}/{dataset_name}/{metric_name}"
+                        if metric_key not in wandb_log_data:
+                            wandb_log_data[metric_key] = {}
+                        wandb_log_data[metric_key][checkpoint_number] = metric_value
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -130,6 +141,7 @@ def main(cfg: DictConfig) -> None:
     for checkpoint_name, checkpoint_results in all_results.items():
         if checkpoint_name == "retain":
             continue
+        checkpoint_number = int(checkpoint_name.split('-')[-1])
         for group in cfg.evaluation_groups:
             group_cfg = OmegaConf.create({
                 "model": cfg.model,
@@ -137,11 +149,29 @@ def main(cfg: DictConfig) -> None:
                 "max_length": cfg.max_length,
                 **group
             })
-            evaluator = Evaluator(model=None, tokenizer=None, config=group_cfg)  # Model and tokenizer not needed for aggregate metrics
-            all_results[checkpoint_name][group['name']]["aggregate_metrics"] = evaluator.compute_aggregate_metrics(
+            evaluator = Evaluator(model=None, tokenizer=None, config=group_cfg)
+            aggregate_metrics = evaluator.compute_aggregate_metrics(
                 retain_results=retain_results.get(group['name'], {}),
                 checkpoint_results=checkpoint_results[group['name']]
             )
+            all_results[checkpoint_name][group['name']]["aggregate_metrics"] = aggregate_metrics
+
+            for metric_name, metric_value in aggregate_metrics.items():
+                metric_key = f"{group['name']}/aggregate/{metric_name}"
+                if metric_key not in wandb_log_data:
+                    wandb_log_data[metric_key] = {}
+                wandb_log_data[metric_key][checkpoint_number] = metric_value
+
+    if wandb_run:
+        for metric_key, checkpoint_values in wandb_log_data.items():
+            data: List[Tuple[int, float]] = sorted(checkpoint_values.items())
+            table = wandb.Table(data=data, columns=["checkpoint", "value"])
+            wandb_run.log({metric_key: wandb.plot.line(
+                table,
+                x="checkpoint",
+                y="value",
+                title=metric_key
+            )})
 
     for group in cfg.evaluation_groups:
         if group.get('save_results_path'):
@@ -153,6 +183,10 @@ def main(cfg: DictConfig) -> None:
 
     print("\nEvaluation Results Summary:")
     print(json.dumps(all_results, indent=2))
+
+@hydra.main(config_path="configs", config_name="evaluate", version_base=None)
+def main(cfg: DictConfig) -> None:
+    evaluate_with_config(cfg)
 
 if __name__ == "__main__":
     main()

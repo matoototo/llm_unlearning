@@ -3,22 +3,25 @@ import gc
 import glob
 import torch
 import hydra
+import wandb
+
+from typing import Tuple
 from omegaconf import DictConfig, OmegaConf
 
 from llm_unlearning.unlearn import main as unlearn_main
-from llm_unlearning.evaluate_model import main as evaluate_main
+from llm_unlearning.evaluate_model import evaluate_with_config
 
 def flush_cache() -> None:
     gc.collect()
     torch.cuda.empty_cache()
 
-def run_unlearn(cfg: DictConfig) -> str:
+def run_unlearn(cfg: DictConfig) -> Tuple[str, wandb.sdk.wandb_run.Run]:
     print("\nStarting Unlearning Process:")
-    unlearn_main(cfg)
+    wandb_run = unlearn_main(cfg)
     output_dir = cfg.training_arguments.output_dir
 
     flush_cache()
-    return output_dir
+    return output_dir, wandb_run
 
 def run_finetune(cfg: DictConfig) -> str:
     print("\nStarting Finetuning Process:")
@@ -33,9 +36,9 @@ def run_finetune(cfg: DictConfig) -> str:
     flush_cache()
     return last_checkpoint
 
-def run_evaluate(cfg: DictConfig) -> None:
+def run_evaluate(cfg: DictConfig, wandb_run: wandb.sdk.wandb_run.Run) -> None:
     print("\nStarting Evaluation Process:")
-    evaluate_main(cfg)
+    evaluate_with_config(cfg, wandb_run)
     flush_cache()
 
 @hydra.main(config_path="configs", config_name="unlearn", version_base=None)
@@ -71,7 +74,7 @@ def main(cfg: DictConfig) -> None:
     else:
         print(f"\nUsing existing retain model for evaluation from path: {eval_cfg.model.retain_path}. Use cfg.finetune_again = true to force finetuning.")
 
-    unlearn_output_dir = run_unlearn(unlearn_cfg)
+    unlearn_output_dir, wandb_run = run_unlearn(unlearn_cfg)
 
     if cfg.rewrite_eval_model_path:
         print(f"\nSince cfg.rewrite_eval_model_path = true, config is being rewritten to use the unlearned model at: {unlearn_output_dir}")
@@ -79,7 +82,9 @@ def main(cfg: DictConfig) -> None:
     else:
         print("\nUsing eval model path from config, use cfg.rewrite_eval_model_path = true to ensure checkpoints from the unlearning step are used.")
 
-    run_evaluate(eval_cfg)
+    run_evaluate(eval_cfg, wandb_run)
+
+    wandb.finish()
 
 if __name__ == "__main__":
     main()

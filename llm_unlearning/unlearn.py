@@ -10,7 +10,7 @@ from llm_unlearning.unlearning_datasets import load_unlearning_dataset
 
 @hydra.main(config_path="configs", config_name="unlearn", version_base=None)
 def main(cfg: DictConfig) -> None:
-    wandb.init(
+    run = wandb.init(
         project="llm-unlearning",
         config=OmegaConf.to_container(cfg, resolve=True),
         group=cfg.get("group", None),
@@ -39,7 +39,8 @@ def main(cfg: DictConfig) -> None:
 
     trainer.train()
 
-    wandb.finish()
+    return run
 
 if __name__ == "__main__":
     main()
+    wandb.finish()
