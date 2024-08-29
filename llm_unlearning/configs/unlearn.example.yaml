@@ -7,6 +7,8 @@ base_dataset: &base_dataset
     question_key: "question"
     answer_key: "answer"
     use_dynamic_labels: false
+    max_rouge_score: 1.0
+    max_regeneration_attempts: 20
     generation_config:
         do_sample: true
         temperature: 1.5

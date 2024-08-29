@@ -4,6 +4,8 @@ import datasets
 from transformers import PreTrainedTokenizer, PreTrainedModel
 from typing import Dict, List, Optional
 from omegaconf import DictConfig, OmegaConf
+from rouge_score import rouge_scorer
+from collections import deque
 
 class TofuDataset(Dataset):
     def __init__(
@@ -24,6 +26,9 @@ class TofuDataset(Dataset):
         self.regenerate_every = config.get("regenerate_every", 1)
         self.current_epoch = 0
         self.dynamic_data = None
+        self.max_rouge_score = config.get("max_rouge_score", 1.0)
+        self.rouge_scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
+        self.max_regeneration_attempts = config.get("max_regeneration_attempts", 20)
 
     def _load_split(self):
         part = None
@@ -150,7 +155,7 @@ class TofuDataset(Dataset):
             "question_length": torch.tensor(question_length)
         }
 
-    def _generate_answers_batch(self, questions: List[str]) -> List[str]:
+    def _generate_answers_batch(self, questions: List[str], original_answers: List[str]) -> List[str]:
         if self.model is None:
             raise ValueError("Model is not set. Cannot generate dynamic labels.")
 
@@ -160,11 +165,18 @@ class TofuDataset(Dataset):
         self.generation_config = OmegaConf.create(self.generation_config)
 
         # temporarily set padding side to left
+        original_padding_side = self.tokenizer.padding_side
         self.tokenizer.padding_side = "left"
 
-        all_answers = []
-        for i in range(0, len(questions), batch_size):
-            batch_questions = questions[i:i+batch_size]
+        job_queue = deque(enumerate(zip(questions, original_answers)))
+        all_answers = [None] * len(questions)
+        regeneration_counts = [0] * len(questions)
+
+        while job_queue:
+            batch = [job_queue.popleft() for _ in range(min(batch_size, len(job_queue)))]
+            batch_indices, batch_data = zip(*batch)
+            batch_questions, batch_original_answers = zip(*batch_data)
+
             input_texts = [f"{self.config.question_start_tag}{q}{self.config.question_end_tag}" for q in batch_questions]
             inputs = self.tokenizer(input_texts, return_tensors="pt", padding=True, truncation=True).to(self.model.device)
 
@@ -177,29 +189,38 @@ class TofuDataset(Dataset):
                     **self.generation_config
                 )
 
-            decoded_outputs = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            batch_answers = [output.split(self.config.question_end_tag)[-1].strip() for output in decoded_outputs]
-            all_answers.extend(batch_answers)
+            batch_answers = [
+                output.split(self.config.question_end_tag)[-1].strip()[8:]
+                for output in self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
+            ]
 
-        self.tokenizer.padding_side = "right"
+            for idx, answer, original_answer in zip(batch_indices, batch_answers, batch_original_answers):
+                rouge_score_enough = self.rouge_scorer.score(original_answer, answer)['rougeL'].fmeasure <= self.max_rouge_score
+                too_many_attempts = regeneration_counts[idx] >= self.max_regeneration_attempts
+                if rouge_score_enough or too_many_attempts:
+                    all_answers[idx] = answer
+                    continue
+                regeneration_counts[idx] += 1
+                job_queue.append((idx, (batch_questions[batch_indices.index(idx)], original_answer)))
+
+        self.tokenizer.padding_side = original_padding_side
         return all_answers
 
     def set_epoch(self, epoch: float):
         epoch = int(epoch)
-        should_regenerate = epoch % self.regenerate_every == 0 and epoch != self.current_epoch
-        self.current_epoch = epoch
-        if not self.use_dynamic_labels: return
-
-        if not should_regenerate and self.dynamic_data is not None: return
+        if not self.use_dynamic_labels or (epoch % self.regenerate_every != 0 and self.dynamic_data is not None):
+            self.current_epoch = epoch
+            return
 
         questions = [item[self.config.question_key] for item in self.data]
-        generated_answers = self._generate_answers_batch(questions)
+        original_answers = [item[self.config.answer_key] for item in self.data]
+        generated_answers = self._generate_answers_batch(questions, original_answers)
 
-        self.dynamic_data = []
-        for item, new_answer in zip(self.data, generated_answers):
-            new_item = item.copy()
-            new_item[self.config.answer_key] = new_answer[8:]  # Strip away "Answer: " prefix
-            self.dynamic_data.append(new_item)
+        self.dynamic_data = [
+            {**item, self.config.answer_key: new_answer}
+            for item, new_answer in zip(self.data, generated_answers)
+        ]
+        self.current_epoch = epoch
 
     @staticmethod
     def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
