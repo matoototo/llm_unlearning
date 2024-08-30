@@ -24,7 +24,7 @@ class TofuDataset(Dataset):
         self.generation_config = config.get("generation_config", {})
         self.use_dynamic_labels = config.get("use_dynamic_labels", False)
         self.regenerate_every = config.get("regenerate_every", 1)
-        self.current_epoch = 0
+        self.current_epoch = -1
         self.dynamic_data = None
         self.max_rouge_score = config.get("max_rouge_score", 1.0)
         self.rouge_scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
@@ -160,9 +160,9 @@ class TofuDataset(Dataset):
             raise ValueError("Model is not set. Cannot generate dynamic labels.")
 
         # doesn't support pop, have to do this garbage
-        self.generation_config = OmegaConf.to_container(self.generation_config, resolve=True)
-        batch_size = self.generation_config.pop("batch_size", 8)
-        self.generation_config = OmegaConf.create(self.generation_config)
+        generation_config = OmegaConf.to_container(self.generation_config, resolve=True)
+        batch_size = generation_config.pop("batch_size", 8)
+        generation_config = OmegaConf.create(generation_config)
 
         # temporarily set padding side to left
         original_padding_side = self.tokenizer.padding_side
@@ -186,7 +186,7 @@ class TofuDataset(Dataset):
                     max_length=self.max_length,
                     eos_token_id=self.tokenizer.eos_token_id,
                     pad_token_id=self.tokenizer.eos_token_id,
-                    **self.generation_config
+                    **generation_config
                 )
 
             batch_answers = [
@@ -208,7 +208,8 @@ class TofuDataset(Dataset):
 
     def set_epoch(self, epoch: float):
         epoch = int(epoch)
-        if not self.use_dynamic_labels or (epoch % self.regenerate_every != 0 and self.dynamic_data is not None):
+        if self.current_epoch == epoch: return
+        if not self.use_dynamic_labels or (self.dynamic_data is not None and epoch % self.regenerate_every != 0):
             self.current_epoch = epoch
             return
 
