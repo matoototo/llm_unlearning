@@ -53,14 +53,14 @@ class Method:
         dynamic_inputs = {k: v for k, v in kwargs.get('dynamic_inputs', {}).items() if k in self.input_keys} if self.use_dynamic else None
         return forget_inputs, retain_inputs, dynamic_inputs
 
-    def get_forget_outputs(self, model: PreTrainedModel, forget_inputs: Dict[str, torch.Tensor], dynamic_inputs: Optional[Dict[str, torch.Tensor]] = None) -> Tuple[torch.Tensor, torch.Tensor, Any]:
+    def get_forget_outputs(self, model: PreTrainedModel, forget_inputs: Dict[str, torch.Tensor], dynamic_inputs: Optional[Dict[str, torch.Tensor]] = None, use_sequence_nll = False) -> Tuple[torch.Tensor, torch.Tensor, Any]:
         with torch.set_grad_enabled(not self.use_dynamic):
             forget_outputs = model(**forget_inputs)
-            forget_loss = forget_outputs.loss
+            forget_loss = forget_outputs.loss if not use_sequence_nll else sequence_nll(forget_outputs.logits, forget_inputs["labels"])
 
         if self.use_dynamic and dynamic_inputs is not None:
             dynamic_outputs = model(**dynamic_inputs)
-            dynamic_loss = dynamic_outputs.loss
+            dynamic_loss = dynamic_outputs.loss if not use_sequence_nll else sequence_nll(dynamic_outputs.logits, dynamic_inputs["labels"])
             return dynamic_loss, forget_loss, (forget_outputs, dynamic_outputs)
         else:
             return forget_loss, forget_loss, forget_outputs
@@ -137,6 +137,7 @@ class NPO(Method):
     def __init__(self, **kwargs):
         self.beta = kwargs.get("beta", 0.1)
         self.retain_coeff = kwargs.get("retain_coeff", 1.0)
+        self.use_sequence_nll = kwargs.get("use_sequence_nll", True)
         super().__init__(**kwargs)
 
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
@@ -147,7 +148,7 @@ class NPO(Method):
             raise ValueError("NPO requires a config.reference_model to be set")
 
         forget_inputs, retain_inputs, dynamic_inputs = self.get_inputs(**kwargs)
-        loss, forget_loss_for_logging, forget_outputs = self.get_forget_outputs(model, forget_inputs, dynamic_inputs)
+        loss, forget_loss_for_logging, forget_outputs = self.get_forget_outputs(model, forget_inputs, dynamic_inputs, use_sequence_nll=self.use_sequence_nll)
 
         with torch.no_grad():
             reference_outputs = reference_model(**forget_inputs)
@@ -164,10 +165,10 @@ class NPO(Method):
 
         loss_dict = {
             "npo_loss": npo_loss.item(),
-            "forget_loss": forget_loss_for_logging.item(),
+            "forget_loss": forget_loss_for_logging.mean().item(),  # Use mean() before item()
             "reference_loss": reference_loss.mean().item(),
             "retain_loss": retain_loss.item() if self.retain_coeff else 0,
-            "dynamic_loss": loss.item() if self.use_dynamic else 0,
+            "dynamic_loss": loss.mean().item() if self.use_dynamic else 0,
         }
 
         return total_loss, loss_dict, (forget_outputs, reference_outputs)
