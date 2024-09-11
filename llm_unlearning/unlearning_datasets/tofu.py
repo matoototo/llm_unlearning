@@ -117,13 +117,8 @@ class TofuDataset(Dataset):
         question_end_tag = self.config.question_end_tag
         answer_tag = self.config.answer_tag
 
-        # Encode question separately to get its length
-        question_encoded = self.tokenizer(
-            f"{question_start_tag}{question}{question_end_tag}",
-            add_special_tokens=True,
-            return_tensors="pt"
-        )
-        question_length = question_encoded.input_ids.size(1)
+        question_text = f"{question_start_tag}{question}{question_end_tag}"
+        question_encoded = self.tokenizer.encode(question_text, add_special_tokens=True)
 
         full_text = f"{question_start_tag}{question}{question_end_tag}{answer_tag}{answer}"
 
@@ -138,6 +133,13 @@ class TofuDataset(Dataset):
 
         input_ids = encoded.input_ids.squeeze()
         attention_mask = encoded.attention_mask.squeeze()
+
+        # Find the maximum overlapping prefix
+        question_length = 0
+        for i in range(min(len(question_encoded), len(input_ids))):
+            if question_encoded[i] != input_ids[i]: break
+            question_length += 1
+
         labels = input_ids.clone()
 
         # Set labels for the question part (including question tokens) to -100
@@ -146,7 +148,9 @@ class TofuDataset(Dataset):
         # Set padding tokens to -100 in labels
         padding_mask = (attention_mask == 0).long()
         # First non-zero padding mask element is eos token, don't mask it
-        padding_mask[padding_mask.argmax()] = False
+        eos_index = padding_mask.argmax()
+         # Check if eos_index is not the first token
+        if eos_index > 0: padding_mask[eos_index] = 0
         labels = labels.masked_fill(padding_mask.bool(), -100)
 
         return {
