@@ -29,6 +29,7 @@ class TofuDataset(Dataset):
         self.max_rouge_score = config.get("max_rouge_score", 1.0)
         self.rouge_scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
         self.max_regeneration_attempts = config.get("max_regeneration_attempts", 20)
+        self.max_length_difference = config.get("max_length_difference", 999999)
 
     def _load_split(self):
         part = None
@@ -197,7 +198,9 @@ class TofuDataset(Dataset):
             for idx, answer, original_answer in zip(batch_indices, batch_answers, batch_original_answers):
                 rouge_score_enough = self.rouge_scorer.score(original_answer, answer)['rougeL'].fmeasure <= self.max_rouge_score
                 too_many_attempts = regeneration_counts[idx] >= self.max_regeneration_attempts
-                if rouge_score_enough or too_many_attempts:
+                length_difference_acceptable = abs(len(answer) - len(original_answer)) / len(original_answer) <= self.max_length_difference
+
+                if (rouge_score_enough and length_difference_acceptable) or too_many_attempts:
                     all_answers[idx] = answer
                     continue
                 regeneration_counts[idx] += 1
