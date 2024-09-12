@@ -5,6 +5,7 @@ import hydra
 import torch
 import shutil
 import wandb
+import numpy as np
 
 from typing import List, Dict, Any, Tuple
 from omegaconf import DictConfig, OmegaConf
@@ -133,6 +134,25 @@ def evaluate_additional_retain_models(cfg: DictConfig, forget_dataset: TofuDatas
 
     return additional_retain_results
 
+def compute_aggregate_stats(metrics_list: List[Dict[str, float]]) -> Dict[str, Dict[str, float]]:
+    """Compute mean and standard deviation for a list of metric dictionaries."""
+    all_metrics = {}
+    for metrics in metrics_list:
+        for key, value in metrics.items():
+            if key not in all_metrics:
+                all_metrics[key] = []
+            all_metrics[key].append(value)
+
+    stats = {}
+    for key, values in all_metrics.items():
+        stats[key] = {
+            "mean": float(np.mean(values)),
+            "std": float(np.std(values)),
+            "min": float(np.min(values)),
+            "max": float(np.max(values))
+        }
+    return stats
+
 def evaluate_with_config(cfg: DictConfig, wandb_run: wandb.sdk.wandb_run.Run = None) -> None:
     print(OmegaConf.to_yaml(cfg))
 
@@ -199,18 +219,31 @@ def evaluate_with_config(cfg: DictConfig, wandb_run: wandb.sdk.wandb_run.Run = N
 
             # Compute additional forget quality scores for additional retain models
             if group['name'] == "forget_evaluation":
+                all_aggregate_metrics = [aggregate_metrics]
                 for i, additional_retain_result in enumerate(additional_retain_results):
                     additional_aggregate_metrics = evaluator.compute_aggregate_metrics(
                         retain_results={ "metrics": { "tofu_forget": additional_retain_result } },
                         checkpoint_results=checkpoint_results[group['name']]
                     )
                     all_results[checkpoint_name][group['name']][f"additional_aggregate_metrics_{i}"] = additional_aggregate_metrics
+                    all_aggregate_metrics.append(additional_aggregate_metrics)
 
                     for metric_name, metric_value in additional_aggregate_metrics.items():
                         metric_key = f"{group['name']}/additional_aggregate_{i}/{metric_name}"
                         if metric_key not in wandb_log_data:
                             wandb_log_data[metric_key] = {}
                         wandb_log_data[metric_key][checkpoint_number] = metric_value
+
+                # Compute mean and std of aggregate metrics across all retain models
+                aggregate_stats = compute_aggregate_stats(all_aggregate_metrics)
+                all_results[checkpoint_name][group['name']]["aggregate_metrics_stats"] = aggregate_stats
+
+                for metric_name, stat_values in aggregate_stats.items():
+                    for stat_name, stat_value in stat_values.items():
+                        metric_key = f"{group['name']}/aggregate_stats/{metric_name}/{stat_name}"
+                        if metric_key not in wandb_log_data:
+                            wandb_log_data[metric_key] = {}
+                        wandb_log_data[metric_key][checkpoint_number] = stat_value
 
     if wandb_run:
         for metric_key, checkpoint_values in wandb_log_data.items():

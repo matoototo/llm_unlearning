@@ -193,6 +193,24 @@ This is similar to the base dataset in the unlearning config. perturb_probabilit
 Similar to the model in the unlearning config. Can also point to a directory with checkpoint directories, in which case it will evaluate all checkpoints in the directory. Additionally, the model specified under base_path is treated as checkpoint-0.
 - `base_path`: Path to the base model (treated as checkpoint-0)
 - `base_tokenizer_path`: Path to the base tokenizer
+- `retain_path`: Path to the main retain model
+- `retain_tokenizer_path`: Path to the main retain model's tokenizer
+- `additional_retain_models`: A list of additional retain models for computing forget quality
+  - Each entry should have `path` and `tokenizer_path` fields
+
+Example configuration for additional retain models:
+
+```yaml
+model:
+  # ... other model configurations ...
+  retain_path: "/path/to/main/retain_model"
+  retain_tokenizer_path: "/path/to/main/retain_model"
+  additional_retain_models:
+    - path: "/path/to/additional_retain_model_1"
+      tokenizer_path: "/path/to/additional_retain_model_1"
+    - path: "/path/to/additional_retain_model_2"
+      tokenizer_path: "/path/to/additional_retain_model_2"
+```
 
 #### evaluation_groups
 A list of evaluation groups, each containing:
@@ -216,6 +234,21 @@ The batch size to use during evaluation.
 
 #### max_length
 The maximum length for generation during evaluation (only relevant for ROUGE).
+
+### Additional Retain Models
+
+The evaluation script supports using multiple retain models for computing forget quality. This feature allows for a more robust evaluation of the unlearning process.
+
+#### Configuration
+To use additional retain models:
+1. In the `model` section of the evaluation config, add an `additional_retain_models` list.
+2. Each entry in this list should be a dictionary with `path` and `tokenizer_path` fields, pointing to the model and its tokenizer.
+
+#### Evaluation Process
+When additional retain models are specified:
+1. The script evaluates these models only on the forget dataset.
+2. For each checkpoint being evaluated, the script computes FQ using each of the additional retain models, as well as the main retain model.
+3. The results include individual scores for each retain model and summary statistics (mean and standard deviation) across all retain models.
 
 ## Plotting
 
