@@ -17,5 +17,6 @@ setup(name='llm_unlearning',
           'rouge_score',
           'scipy',
           'scikit-learn',
+          'openai',
       ],
 )

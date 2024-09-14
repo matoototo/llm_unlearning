@@ -2,8 +2,9 @@ import torch
 import torch.nn.functional as F
 import einops
 
-from typing import Dict, Any, List, Literal
+from typing import Dict, Any, List, Literal, Tuple
 from rouge_score import rouge_scorer, tokenizers
+from transformers import PreTrainedTokenizer, PreTrainedModel
 
 def sequence_nll(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
     """
@@ -159,3 +160,65 @@ def calculate_rouge_scores(decoded_outputs: List[str], decoded_labels: List[str]
         rouge_score([output], [label], rouge_type)
         for output, label in zip(decoded_outputs, decoded_labels)
     ]
+
+def generate_and_extract(
+    model: PreTrainedModel,
+    batch: Dict[str, Any],
+    tokenizer: PreTrainedTokenizer,
+    max_length: int,
+    device: torch.device,
+    generation_kwargs: Dict[str, Any] = None
+) -> Tuple[List[str], List[str], List[str]]:
+    """
+    Generate answers using the model and extract questions, ground truths, and generated answers.
+
+    Args:
+        model (PreTrainedModel): The language model used for generation.
+        batch (Dict[str, Any]): The input batch containing input_ids, attention_mask, labels, and question_length.
+        tokenizer (PreTrainedTokenizer): The tokenizer used to decode the tokens.
+        max_length (int): The maximum length for generated sequences.
+        device (torch.device): The device to perform computations on.
+        generation_kwargs (Dict[str, Any], optional): Additional kwargs for generation.
+
+    Returns:
+        Tuple[List[str], List[str], List[str]]: Lists of questions, ground truths, and generated answers.
+    """
+    pad_token_id = tokenizer.pad_token_id
+    generation_kwargs = generation_kwargs or {}
+
+    input_ids, attention_mask = extract_question_tokens(batch, pad_token_id)
+    input_ids = input_ids.to(device)
+    attention_mask = attention_mask.to(device)
+
+    labels = batch["input_ids"].to(device)
+    question_length = batch["question_length"]
+
+    outputs = model.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        max_length=max_length,
+        pad_token_id=pad_token_id,
+        eos_token_id=tokenizer.eos_token_id,
+        **generation_kwargs
+    )
+
+    extracted_outputs = extract_answer_tokens(outputs, question_length, pad_token_id)
+    extracted_labels = extract_answer_tokens(labels, question_length, pad_token_id)
+
+    decoded_outputs = tokenizer.batch_decode(extracted_outputs, skip_special_tokens=True)
+    decoded_labels = tokenizer.batch_decode(extracted_labels, skip_special_tokens=True)
+
+    # Strip away "Answer: " prefix
+    decoded_outputs = [output[8:] for output in decoded_outputs]
+    decoded_labels = [label[8:] for label in decoded_labels]
+
+    batch_size = input_ids.size(0)
+    question_texts = []
+    for i in range(batch_size):
+        q_length = question_length[i].item()
+        # Since input_ids are left-padded, we need to get the last q_length tokens
+        question_tokens = input_ids[i, -q_length:]
+        q_text = tokenizer.decode(question_tokens, skip_special_tokens=True).strip()
+        question_texts.append(q_text)
+
+    return question_texts, decoded_labels, decoded_outputs

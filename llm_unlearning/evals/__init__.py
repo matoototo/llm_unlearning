@@ -1,5 +1,6 @@
 from .evals import *
 from .tofu_evals import *
+from .llm_evals import *
 
 all_metrics = {
     "truth_ratio": lambda config: TruthRatio(),
@@ -10,6 +11,8 @@ all_metrics = {
     "rouge_l": lambda config: Rouge(max_length=config.max_length, rouge_type='rougeL'),
     "rouge_lsum": lambda config: Rouge(max_length=config.max_length, rouge_type='rougeLsum'),
     "sampling_rouge_l": lambda config: AdversarialRouge(max_length=config.max_length, rouge_type='rougeL'),
+
+    "unlearning_coherency": lambda config: UnlearningCoherency(config),
 }
 
 all_aggregate_metrics = {

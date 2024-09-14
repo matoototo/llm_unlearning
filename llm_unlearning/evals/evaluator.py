@@ -50,25 +50,45 @@ class Evaluator:
 
         return {k: move_to_device(v) for k, v in batch.items()}
 
-    def _compute_metric(self, dataset: TofuDataset, eval: Evaluation, desc: str) -> Dict[str, float]:
+    def _compute_metric(self, dataset: TofuDataset, eval: Evaluation, desc: str) -> Dict[str, Any]:
         batch_size_factor = self.batch_size_factors.get(desc.lower(), 1.0)
         dataloader = self._get_dataloader(dataset, batch_size_factor)
         perturb_probability = dataset.config.perturb_probability
-        total_metric = 0.0
+        total_metrics = {}
         total_samples = 0
+        eval_scores = {}
 
-        eval_scores = []
         with torch.no_grad():
             for batch in tqdm(dataloader, desc=desc):
                 batch = self._process_batch(batch)
                 batch_metric = eval.compute(self.model, batch, self.tokenizer, perturb_probability=perturb_probability)
-                eval_scores.extend(batch_metric.cpu().numpy().tolist())
-                total_metric += batch_metric.sum().item()
-                total_samples += batch_metric.size(0)
 
-        avg_metric = total_metric / total_samples
+                if isinstance(batch_metric, dict):
+                    for key, value in batch_metric.items():
+                        if key not in total_metrics:
+                            total_metrics[key] = 0.0
+                            eval_scores[key] = []
+                        total_metrics[key] += value.sum().item()
+                        eval_scores[key].extend(value.cpu().numpy().tolist())
+                else:
+                    if 'default' not in total_metrics:
+                        total_metrics['default'] = 0.0
+                        eval_scores['default'] = []
+                    total_metrics['default'] += batch_metric.sum().item()
+                    eval_scores['default'].extend(batch_metric.cpu().numpy().tolist())
+
+                total_samples += batch_metric.size(0) if isinstance(batch_metric, torch.Tensor) else len(next(iter(batch_metric.values())))
+
+        results = {}
         name = desc.lower().replace(" ", "_")
-        return { name: avg_metric, f"{name}_metadata": eval_scores }
+
+        for key in total_metrics:
+            avg_metric = total_metrics[key] / total_samples
+            metric_name = f"{name}_{key}" if key != 'default' else name
+            results[metric_name] = avg_metric
+            results[f"{metric_name}_metadata"] = eval_scores[key]
+
+        return results
 
     def evaluate(self, dataset: TofuDataset) -> Dict[str, Any]:
         results = {}

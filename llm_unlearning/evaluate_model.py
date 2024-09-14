@@ -109,14 +109,16 @@ def delete_checkpoint(checkpoint_path: str):
 
 def evaluate_additional_retain_models(cfg: DictConfig, forget_dataset: TofuDataset) -> List[Dict[str, Any]]:
     additional_retain_results = []
+
+    forget_group_cfg = next((group for group in cfg.evaluation_groups if group['name'] == "forget_evaluation"), None)
+    if not forget_group_cfg: return additional_retain_results
+
     for i, retain_model_config in enumerate(cfg.model.get("additional_retain_models", [])):
         print(f"\nEvaluating additional retain model {i+1}")
         model, tokenizer = load_model_and_tokenizer(retain_model_config)
         forget_dataset.tokenizer = tokenizer
         model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         model.eval()
-
-        forget_group_cfg = next(group for group in cfg.evaluation_groups if group['name'] == "forget_evaluation")
 
         config = OmegaConf.create({
             "model": retain_model_config,
@@ -160,11 +162,14 @@ def evaluate_with_config(cfg: DictConfig, wandb_run: wandb.sdk.wandb_run.Run = N
     all_results = {}
     wandb_log_data = {}
 
-    # Evaluate additional retain models on forget set
-    forget_group = next(group for group in cfg.evaluation_groups if group['name'] == "forget_evaluation")
-    forget_dataset_config = forget_group['datasets']['tofu_forget']
-    forget_dataset = TofuDataset(tokenizer=None, config=forget_dataset_config)
-    additional_retain_results = evaluate_additional_retain_models(cfg, forget_dataset)
+    forget_group = next((group for group in cfg.evaluation_groups if group['name'] == "forget_evaluation"), None)
+    forget_dataset = None
+    additional_retain_results = []
+
+    if forget_group:
+        forget_dataset_config = forget_group['datasets']['tofu_forget']
+        forget_dataset = TofuDataset(tokenizer=None, config=forget_dataset_config)
+        additional_retain_results = evaluate_additional_retain_models(cfg, forget_dataset)
 
     for checkpoint_path in checkpoint_paths:
         checkpoint_name = os.path.basename(checkpoint_path)
@@ -218,7 +223,7 @@ def evaluate_with_config(cfg: DictConfig, wandb_run: wandb.sdk.wandb_run.Run = N
                 wandb_log_data[metric_key][checkpoint_number] = metric_value
 
             # Compute additional forget quality scores for additional retain models
-            if group['name'] == "forget_evaluation":
+            if group['name'] == "forget_evaluation" and forget_dataset:
                 all_aggregate_metrics = [aggregate_metrics]
                 for i, additional_retain_result in enumerate(additional_retain_results):
                     additional_aggregate_metrics = evaluator.compute_aggregate_metrics(
