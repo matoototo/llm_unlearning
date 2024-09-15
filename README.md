@@ -285,3 +285,15 @@ More information:
 ```bash
 python -m llm_unlearning.utils.plotting_joint --help
 ```
+
+## Possible issues
+
+### Loading Llama-3.1-8B-Instruct for UnlearningCoherency
+
+`ValueError: rope_scaling must be a dictionary with two fields, type and factor`
+
+This is due to an outdated `transformers` version, see [here](https://huggingface.co/meta-llama/Meta-Llama-3.1-8B-Instruct/discussions/15). To fix, simply:
+
+```bash
+pip install --upgrade transformers
+```
