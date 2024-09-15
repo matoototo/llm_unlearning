@@ -17,6 +17,8 @@ class UnlearningCoherency(Evaluation):
 
         self.max_length = config.get('max_length', 512)
         self.model_backend = config.get('model_backend', 'openai').lower()
+        self.use_fp16 = config.get('use_fp16', True)
+
         if self.model_backend == 'openai':
             self.api_key = os.getenv('OPENAI_API_KEY')
             if not self.api_key:
@@ -24,13 +26,18 @@ class UnlearningCoherency(Evaluation):
             openai.api_key = self.api_key
             self.openai_model = config.get('openai_model', 'gpt-4o-mini')
         elif self.model_backend == 'huggingface':
-            raise NotImplementedError("HuggingFace model backend not yet supported.")
+            self.model_name = config.get('model_name', 'meta-llama/Meta-Llama-3.1-8B-Instruct')
+            print(f"Using HuggingFace model: {self.model_name} for unlearning/coherency evaluation.")
+
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self.model = AutoModelForCausalLM.from_pretrained(self.model_name, torch_dtype=torch.float16 if self.use_fp16 else torch.float32)
+
+            if torch.cuda.is_available():
+                self.model = self.model.to('cuda')
         else:
             raise ValueError(f"Unsupported model backend: {self.model_backend}")
 
     def compute(self, model, batch: Dict[str, Any], tokenizer=None, **kwargs) -> Dict[str, torch.Tensor]:
-        if self.model_backend == 'huggingface' and model is None:
-            raise ValueError("HuggingFace model must be provided for HuggingFace backend.")
         device = model.device if model else torch.device('cpu')
 
         question_texts, decoded_labels, decoded_outputs = generate_and_extract(
@@ -47,6 +54,9 @@ class UnlearningCoherency(Evaluation):
             messages = [{"role": "user", "content": prompt}]
             response = self._get_llm_response(messages)
             unlearning_score, coherency_score = self._parse_response(response)
+            if unlearning_score == 0 and coherency_score == 0:
+                print(f"Warning: Failed to get scores for question: {q}")
+                continue
             scores.append([unlearning_score, coherency_score])
 
         return {
@@ -68,9 +78,15 @@ class UnlearningCoherency(Evaluation):
                 print(f"OpenAI API error: {e}")
                 return ""
         elif self.model_backend == 'huggingface':
-            raise NotImplementedError("HuggingFace model backend not yet supported.")
-        else:
-            raise ValueError(f"Unsupported model backend: {self.model_backend}")
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            try:
+                input_ids = self.tokenizer.apply_chat_template(messages, return_tensors="pt").to(self.model.device)
+                output = self.model.generate(input_ids, attention_mask=input_ids.ne(self.tokenizer.pad_token_id), max_new_tokens=150, pad_token_id=self.tokenizer.pad_token_id)
+                decoded = self.tokenizer.decode(output[0][input_ids.shape[1]:], skip_special_tokens=True).strip()
+                return decoded
+            except Exception as e:
+                print(f"HuggingFace model error: {e}")
+                return ""
 
     def _parse_response(self, response: str) -> Tuple[int, int]:
         unlearning_score = 0
