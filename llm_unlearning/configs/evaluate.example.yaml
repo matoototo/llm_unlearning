@@ -41,6 +41,11 @@ evaluation_groups:
         split: "forget10_perturbed"
     metrics:
       - truth_ratio
+      # You can pass config values like this:
+      # - name: unlearning_coherency
+      #   config:
+      #     model_backend: openai
+      #     openai_model: "gpt-4"
     batch_size_factors:
       truth_ratio: 0.25
     aggregate_metrics:

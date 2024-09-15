@@ -1,6 +1,8 @@
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from typing import Dict, Any
+from omegaconf import OmegaConf, DictConfig
+
 import torch
 
 from llm_unlearning.unlearning_datasets.tofu import TofuDataset
@@ -18,11 +20,23 @@ class Evaluator:
         if model: self.model.group = group_name
         self.metrics = {}
         self.batch_size_factors = config.get("batch_size_factors", {})
-        for metric in self.config.metrics:
-            if metric not in all_metrics:
-                print(f"Warning: Metric '{metric}' not recognized and will be skipped.")
+
+        for metric_entry in self.config.metrics:
+            if isinstance(metric_entry, str):
+                metric_name = metric_entry
+                metric_config = {}
+            elif isinstance(metric_entry, DictConfig):
+                metric_name = metric_entry['name']
+                metric_config = metric_entry.get('config', {})
+            else:
+                raise ValueError(f"Invalid metric entry: {metric_entry}")
+
+            if metric_name not in all_metrics:
+                print(f"Warning: Metric '{metric_name}' not recognized and will be skipped.")
                 continue
-            self.metrics[metric] = all_metrics[metric](self.config)
+
+            merged_config = OmegaConf.merge(self.config, OmegaConf.create(metric_config))
+            self.metrics[metric_name] = all_metrics[metric_name](merged_config)
 
         self.aggregate_metrics = {}
         for metric in self.config.get("aggregate_metrics", []):
