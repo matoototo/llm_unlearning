@@ -92,7 +92,7 @@ class UnlearningCoherency(Evaluation):
             self.tokenizer.pad_token = self.tokenizer.eos_token
             try:
                 input_ids = self.tokenizer.apply_chat_template(messages, return_tensors="pt").to(self.model.device)
-                output = self.model.generate(input_ids, attention_mask=input_ids.ne(self.tokenizer.pad_token_id), max_new_tokens=150, pad_token_id=self.tokenizer.pad_token_id, temperature=0.0)
+                output = self.model.generate(input_ids, attention_mask=input_ids.ne(self.tokenizer.pad_token_id), max_new_tokens=150, pad_token_id=self.tokenizer.pad_token_id, temperature=0.0, do_sample=False)
                 decoded = self.tokenizer.decode(output[0][input_ids.shape[1]:], skip_special_tokens=True).strip()
                 return decoded
             except Exception as e:
