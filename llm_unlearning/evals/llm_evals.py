@@ -49,6 +49,8 @@ class UnlearningCoherency(Evaluation):
         )
 
         scores = []
+        per_item_data = []
+
         for q, gt, ga in zip(question_texts, decoded_labels, decoded_outputs):
             prompt = self.prompt_template.format(question=q, ground_truth=gt, generated_answer=ga)
             messages = [{"role": "user", "content": prompt}]
@@ -59,9 +61,18 @@ class UnlearningCoherency(Evaluation):
                 continue
             scores.append([unlearning_score, coherency_score])
 
+            per_item_data.append({
+                'question': q,
+                'ground_truth': gt,
+                'generated_answer': ga,
+                'unlearning_score': unlearning_score,
+                'coherency_score': coherency_score
+            })
+
         return {
             "unlearning": torch.tensor([s[0] for s in scores], dtype=torch.float32),
-            "coherency": torch.tensor([s[1] for s in scores], dtype=torch.float32)
+            "coherency": torch.tensor([s[1] for s in scores], dtype=torch.float32),
+            "metadata": per_item_data
         }
 
     def _get_llm_response(self, messages: List[Dict[str, str]]) -> str:
@@ -81,7 +92,7 @@ class UnlearningCoherency(Evaluation):
             self.tokenizer.pad_token = self.tokenizer.eos_token
             try:
                 input_ids = self.tokenizer.apply_chat_template(messages, return_tensors="pt").to(self.model.device)
-                output = self.model.generate(input_ids, attention_mask=input_ids.ne(self.tokenizer.pad_token_id), max_new_tokens=150, pad_token_id=self.tokenizer.pad_token_id)
+                output = self.model.generate(input_ids, attention_mask=input_ids.ne(self.tokenizer.pad_token_id), max_new_tokens=150, pad_token_id=self.tokenizer.pad_token_id, temperature=0.0)
                 decoded = self.tokenizer.decode(output[0][input_ids.shape[1]:], skip_special_tokens=True).strip()
                 return decoded
             except Exception as e:

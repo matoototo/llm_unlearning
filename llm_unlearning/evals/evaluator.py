@@ -9,7 +9,7 @@ from llm_unlearning.unlearning_datasets.tofu import TofuDataset
 from llm_unlearning.evals import Evaluation, all_metrics, all_aggregate_metrics
 
 class Evaluator:
-    def __init__(self, model, tokenizer, config, group_name = None):
+    def __init__(self, model, tokenizer, config, group_name=None):
         self.config = config
         self.tokenizer = tokenizer
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -71,11 +71,16 @@ class Evaluator:
         total_metrics = {}
         total_samples = 0
         eval_scores = {}
+        per_item_data = []
 
         with torch.no_grad():
             for batch in tqdm(dataloader, desc=desc):
                 batch = self._process_batch(batch)
                 batch_metric = eval.compute(self.model, batch, self.tokenizer, perturb_probability=perturb_probability)
+
+                if 'metadata' in batch_metric:
+                    per_item_data.extend(batch_metric['metadata'])
+                    del batch_metric['metadata']
 
                 if isinstance(batch_metric, dict):
                     for key, value in batch_metric.items():
@@ -101,6 +106,8 @@ class Evaluator:
             metric_name = f"{name}_{key}" if key != 'default' else name
             results[metric_name] = avg_metric
             results[f"{metric_name}_metadata"] = eval_scores[key]
+
+        if per_item_data: results['per_item_data'] = per_item_data
 
         return results
 

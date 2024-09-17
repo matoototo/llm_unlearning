@@ -51,6 +51,8 @@ evaluation_groups:
     aggregate_metrics:
       - ks_test
     save_results_path: "./forget_results.json"
+    save_per_item_data_path: "./per_item_results.json"
+
 
   - name: "retain_evaluation"
     datasets:

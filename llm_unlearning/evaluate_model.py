@@ -68,8 +68,9 @@ def load_model_for_evaluation(cfg: DictConfig, checkpoint_path: str) -> Tuple[An
 
     return model, tokenizer
 
-def evaluate_checkpoint(model: Any, tokenizer: Any, evaluation_groups: List[Dict[str, Any]], cfg: DictConfig) -> Dict[str, Dict[str, Any]]:
+def evaluate_checkpoint(model: Any, tokenizer: Any, evaluation_groups: List[Dict[str, Any]], cfg: DictConfig) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
     checkpoint_results = {}
+    per_item_data_by_group = {}
 
     for group in evaluation_groups:
         print(f"\nEvaluating group: {group['name']}")
@@ -82,12 +83,20 @@ def evaluate_checkpoint(model: Any, tokenizer: Any, evaluation_groups: List[Dict
 
         evaluator = Evaluator(model=model, tokenizer=tokenizer, config=group_cfg, group_name=group['name'])
         group_results = {"metrics": {}, "aggregate_metrics": {}}
+        per_item_data = []
 
         for dataset_name, dataset_config in group_cfg['datasets'].items():
             dataset = TofuDataset(tokenizer=tokenizer, config=dataset_config)
             print(f"Evaluating dataset: {dataset_config['name']}")
             results = evaluator.evaluate(dataset=dataset)
             group_results["metrics"][dataset_config['name']] = results
+
+            if 'per_item_data' in results:
+                per_item_data.extend(results['per_item_data'])
+
+        if per_item_data:
+            if group['name'] not in per_item_data_by_group: per_item_data_by_group[group['name']] = {}
+            per_item_data_by_group[group['name']] = per_item_data
 
         checkpoint_results[group['name']] = group_results
 
@@ -97,7 +106,8 @@ def evaluate_checkpoint(model: Any, tokenizer: Any, evaluation_groups: List[Dict
             "inside_boundary_count": model.hook.inside_boundary_count
         }
 
-    return checkpoint_results
+    return checkpoint_results, per_item_data_by_group
+
 
 def delete_checkpoint(checkpoint_path: str):
     """Delete the checkpoint directory."""
@@ -107,11 +117,13 @@ def delete_checkpoint(checkpoint_path: str):
     else:
         print(f"Checkpoint not found: {checkpoint_path}")
 
+
 def evaluate_additional_retain_models(cfg: DictConfig, forget_dataset: TofuDataset) -> List[Dict[str, Any]]:
     additional_retain_results = []
 
     forget_group_cfg = next((group for group in cfg.evaluation_groups if group['name'] == "forget_evaluation"), None)
-    if not forget_group_cfg: return additional_retain_results
+    if not forget_group_cfg:
+        return additional_retain_results
 
     for i, retain_model_config in enumerate(cfg.model.get("additional_retain_models", [])):
         print(f"\nEvaluating additional retain model {i+1}")
@@ -160,6 +172,7 @@ def evaluate_with_config(cfg: DictConfig, wandb_run: wandb.sdk.wandb_run.Run = N
 
     checkpoint_paths = get_checkpoint_paths(cfg)
     all_results = {}
+    all_per_item_data = {}
     wandb_log_data = {}
 
     forget_group = next((group for group in cfg.evaluation_groups if group['name'] == "forget_evaluation"), None)
@@ -173,14 +186,20 @@ def evaluate_with_config(cfg: DictConfig, wandb_run: wandb.sdk.wandb_run.Run = N
 
     for checkpoint_path in checkpoint_paths:
         checkpoint_name = os.path.basename(checkpoint_path)
-        checkpoint_number = int(checkpoint_name.split('-')[-1]) if checkpoint_name != "retain" else -1
+        checkpoint_number = int(checkpoint_name.split('-')[-1]) if checkpoint_name not in ["retain", "checkpoint-0"] else (-1 if checkpoint_name == "retain" else 0)
         print(f"\nEvaluating {checkpoint_name}")
 
         model, tokenizer = load_model_for_evaluation(cfg, checkpoint_path)
-        checkpoint_results = evaluate_checkpoint(model, tokenizer, cfg.evaluation_groups, cfg)
+        checkpoint_results, per_item_data_by_group = evaluate_checkpoint(model, tokenizer, cfg.evaluation_groups, cfg)
         all_results[checkpoint_name] = checkpoint_results
 
+        for group_name, per_item_data in per_item_data_by_group.items():
+            if group_name not in all_per_item_data:
+                all_per_item_data[group_name] = {}
+            all_per_item_data[group_name][checkpoint_name] = per_item_data
+
         for group_name, group_results in checkpoint_results.items():
+            if group_name == "boundary_stats": continue
             for dataset_name, dataset_metrics in group_results['metrics'].items():
                 for metric_name, metric_value in dataset_metrics.items():
                     if not metric_name.endswith('_metadata'):
@@ -249,6 +268,15 @@ def evaluate_with_config(cfg: DictConfig, wandb_run: wandb.sdk.wandb_run.Run = N
                         if metric_key not in wandb_log_data:
                             wandb_log_data[metric_key] = {}
                         wandb_log_data[metric_key][checkpoint_number] = stat_value
+
+    for group in cfg.evaluation_groups:
+        if group.get('save_per_item_data_path'):
+            group_name = group['name']
+            per_item_data_for_group = all_per_item_data.get(group_name, {})
+            os.makedirs(os.path.dirname(group['save_per_item_data_path']), exist_ok=True)
+            with open(group['save_per_item_data_path'], 'w') as f:
+                json.dump({group_name: per_item_data_for_group}, f, indent=2)
+            print(f"Per-item data for group {group_name} saved to {group['save_per_item_data_path']}")
 
     if wandb_run:
         for metric_key, checkpoint_values in wandb_log_data.items():
