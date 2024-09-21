@@ -294,6 +294,11 @@ def get_wmdp_dataset(
             retain_idx = torch.randint(0, len(self.retain_dataset), (1,)).item()
             result["retain_inputs"] = self.retain_dataset[retain_idx]
 
+            # some wikitext rows are empty, here we resample that case
+            while (result["retain_inputs"]['input_ids'] == 50256).all():
+                retain_idx = torch.randint(0, len(self.retain_dataset), (1,)).item()
+                result["retain_inputs"] = self.retain_dataset[retain_idx]
+
             return result
 
         def set_epoch(self, epoch):
