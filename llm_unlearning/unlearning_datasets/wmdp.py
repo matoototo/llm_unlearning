@@ -26,8 +26,9 @@ class WMDPDataset(Dataset):
         self.dynamic_data = None
         self.max_length = config.max_length
         self.max_length_difference = config.get("max_length_difference", 999999)
-        self.min_prefix_length = config.get("min_prefix_length", 5)
-        self.max_prefix_length = config.get("max_prefix_length", 50)
+        self.min_prefix_length = config.get("min_prefix_length", 100)
+        self.max_prefix_length = config.get("max_prefix_length", 200)
+        self.max_offset = config.get("max_offset", 999999)
         self.max_rouge_score = config.get("max_rouge_score", 1.0)
         self.rouge_scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
         self.max_regeneration_attempts = config.get("max_regeneration_attempts", 20)
@@ -46,6 +47,12 @@ class WMDPDataset(Dataset):
 
     def _process_item(self, item: Dict) -> Dict[str, torch.Tensor]:
         text = item['text']
+
+        offset = min(self.max_offset, len(text) - 1) if self.max_offset > 0 else 0
+        if offset > 0:
+            offset = torch.randint(0, offset + 1, (1,)).item()
+            text = text[offset:]
+
         return self._encode_text(text)
 
     def _process_dynamic_item(self, item: Dict) -> Dict[str, torch.Tensor]:
@@ -159,8 +166,15 @@ class WMDPDataset(Dataset):
 
         for item in self.data:
             text = item['text']
+
+            offset = min(self.max_offset, len(text) - 1) if self.max_offset > 0 else 0
+            if offset > 0:
+                offset = torch.randint(0, offset + 1, (1,)).item()
+                text = text[offset:]
+
             tokens = self.tokenizer.encode(text, add_special_tokens=False)
             full_length = len(tokens)
+
             min_prefix = min(self.min_prefix_length, full_length - 1)
             max_prefix = min(self.max_prefix_length, full_length - 1)
 
