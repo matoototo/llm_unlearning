@@ -250,6 +250,17 @@ When additional retain models are specified:
 2. For each checkpoint being evaluated, the script computes FQ using each of the additional retain models, as well as the main retain model.
 3. The results include individual scores for each retain model and summary statistics (mean and standard deviation) across all retain models.
 
+## Evaluating WMDP and MMLU
+
+To evaluate WMDP and MMLU, use the LM evaluation harness. See [here](https://github.com/EleutherAI/lm-evaluation-harness?tab=readme-ov-file#install) for installation. Usage example:
+
+```bash
+lm_eval --model hf \
+    --model_args pretrained=path \
+    --tasks wmdp,mmlu \
+    --batch_size=auto
+```
+
 ## Plotting
 
 Evaluation results can be plotted using `llm_unlearning.utils.plotting` or `llm_unlearning.utils.plotting_joint`.
