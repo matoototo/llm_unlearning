@@ -7,6 +7,8 @@ from omegaconf import DictConfig, OmegaConf
 from rouge_score import rouge_scorer
 from collections import deque
 
+from llm_unlearning.evals.utils import probability
+
 class WMDPDataset(Dataset):
     def __init__(
         self,
@@ -30,8 +32,10 @@ class WMDPDataset(Dataset):
         self.max_prefix_length = config.get("max_prefix_length", 200)
         self.max_offset = config.get("max_offset", 999999)
         self.max_rouge_score = config.get("max_rouge_score", 1.0)
+        self.max_logprob_difference = config.get("max_logprob_difference", float('inf'))
         self.rouge_scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
         self.max_regeneration_attempts = config.get("max_regeneration_attempts", 20)
+        self.original_logprobs_cache = {}
 
     def _load_split(self):
         return datasets.load_dataset(self.config.path, self.config.split)["train"]
@@ -105,12 +109,16 @@ class WMDPDataset(Dataset):
         original_padding_side = self.tokenizer.padding_side
         self.tokenizer.padding_side = "left"
 
+        if self.max_logprob_difference != float('inf'):
+            self._compute_and_cache_original_logprobs(prompts, original_texts)
+
         job_queue = deque(enumerate(zip(prompts, original_texts)))
         all_generated_texts = [None] * len(prompts)
         regeneration_counts = [0] * len(prompts)
 
         while job_queue:
-            batch = [job_queue.popleft() for _ in range(min(batch_size, len(job_queue)))]
+            current_batch_size = min(batch_size, len(job_queue))
+            batch = [job_queue.popleft() for _ in range(current_batch_size)]
             batch_indices, batch_data = zip(*batch)
             batch_prompts, batch_original_texts = zip(*batch_data)
 
@@ -127,7 +135,10 @@ class WMDPDataset(Dataset):
 
             batch_generated_texts = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
 
-            for idx, prompt, generated_text, original_text in zip(batch_indices, batch_prompts, batch_generated_texts, batch_original_texts):
+            prompt_lengths = []
+            generated_texts_full = []
+
+            for idx, prompt, generated_text in zip(batch_indices, batch_prompts, batch_generated_texts):
                 # Remove the prompt from the generated text
                 if generated_text.startswith(prompt):
                     generated_text = generated_text[len(prompt):]
@@ -137,20 +148,82 @@ class WMDPDataset(Dataset):
                     pass
 
                 # Compute Rouge score between generated_text and original continuation
+                original_text = batch_original_texts[batch_indices.index(idx)]
                 original_continuation = original_text[len(prompt):]
-                rouge_score = self.rouge_scorer.score(original_continuation, generated_text)['rougeL'].fmeasure
-                rouge_score_enough = rouge_score <= self.max_rouge_score
-                too_many_attempts = regeneration_counts[idx] >= self.max_regeneration_attempts
+                rouge_score_value = self.rouge_scorer.score(original_continuation, generated_text)['rougeL'].fmeasure
+                rouge_score_enough = rouge_score_value <= self.max_rouge_score
                 length_difference_acceptable = abs(len(generated_text) - len(original_continuation)) / max(len(original_continuation), 1) <= self.max_length_difference
 
-                if (rouge_score_enough and length_difference_acceptable) or too_many_attempts:
-                    all_generated_texts[idx] = generated_text
-                    continue
-                regeneration_counts[idx] += 1
-                job_queue.append((idx, (prompt, original_text)))
+                # Prepare texts for logprob computation
+                generated_text_full = prompt + generated_text
+                generated_texts_full.append(generated_text_full)
+                prompt_tokenized = self.tokenizer.encode(prompt, add_special_tokens=False)
+                prompt_lengths.append(len(prompt_tokenized))
+
+            if self.max_logprob_difference != float('inf'):
+                generated_encodings = self.tokenizer(generated_texts_full, return_tensors="pt", padding=True, truncation=True).to(self.model.device)
+                labels_generated = generated_encodings['input_ids'].clone()
+
+                for i in range(len(batch_indices)):
+                    labels_generated[i][:prompt_lengths[i]] = -100
+
+                with torch.no_grad():
+                    outputs_generated = self.model(**generated_encodings)
+
+                logprob_generated = probability(outputs_generated.logits, labels_generated, logprobs=True)
+
+            for i, idx in enumerate(batch_indices):
+                too_many_attempts = regeneration_counts[idx] >= self.max_regeneration_attempts
+                accept_generation = (rouge_score_enough and length_difference_acceptable) or too_many_attempts
+
+                if self.max_logprob_difference != float('inf'):
+                    logprob_gen = logprob_generated[i].item()
+                    logprob_orig = self.original_logprobs_cache[idx]
+                    logprob_difference = logprob_gen - logprob_orig
+                    accept_generation = accept_generation and (logprob_difference >= -self.max_logprob_difference)
+
+                if accept_generation:
+                    all_generated_texts[idx] = batch_generated_texts[i][len(batch_prompts[i]):]
+                else:
+                    regeneration_counts[idx] += 1
+                    job_queue.append((idx, (batch_prompts[i], batch_original_texts[i])))
 
         self.tokenizer.padding_side = original_padding_side
         return all_generated_texts
+
+    def _compute_and_cache_original_logprobs(self, prompts: List[str], original_texts: List[str]):
+        """
+        Compute and cache original log probabilities for all prompts and original texts.
+        """
+        if self.original_logprobs_cache:
+            return
+
+        batch_size = len(prompts)
+        batch_indices = list(range(batch_size))
+
+        original_texts_full = []
+        prompt_lengths = []
+
+        for idx, prompt, original_text in zip(batch_indices, prompts, original_texts):
+            original_text_full = original_text
+            original_texts_full.append(original_text_full)
+            prompt_tokenized = self.tokenizer.encode(prompt, add_special_tokens=False)
+            prompt_lengths.append(len(prompt_tokenized))
+
+        original_encodings = self.tokenizer(original_texts_full, return_tensors="pt", padding=True, truncation=True).to(self.model.device)
+
+        labels_original = original_encodings['input_ids'].clone()
+
+        for i in range(len(batch_indices)):
+            labels_original[i][:prompt_lengths[i]] = -100
+
+        with torch.no_grad():
+            outputs_original = self.model(**original_encodings)
+
+        logprob_original = probability(outputs_original.logits, labels_original, logprobs=True)
+
+        for i, idx in enumerate(batch_indices):
+            self.original_logprobs_cache[idx] = logprob_original[i].item()
 
     def set_epoch(self, epoch: float):
         epoch = int(epoch)
