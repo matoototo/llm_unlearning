@@ -261,6 +261,8 @@ lm_eval --model hf \
     --batch_size=auto
 ```
 
+There is also a Python script in `llm_unlearning/utils/lm_eval.py` that can be used to run the harness on all model checkpoints under a specific root. It saves the extracted results tables under parent(checkpoint_dir)/results/lm_eval_{checkpoint}.md.
+
 ## Plotting
 
 Evaluation results can be plotted using `llm_unlearning.utils.plotting` or `llm_unlearning.utils.plotting_joint`.
