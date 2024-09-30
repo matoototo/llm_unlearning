@@ -6,6 +6,9 @@ from typing import Dict, List, Optional
 from omegaconf import DictConfig, OmegaConf
 from rouge_score import rouge_scorer
 from collections import deque
+import copy
+
+from llm_unlearning.evals.utils import probability
 
 class TofuDataset(Dataset):
     def __init__(
@@ -21,6 +24,7 @@ class TofuDataset(Dataset):
         self.split = config.split
         self.data = self._load_split()
         self.model = model
+        self.original_model = copy.deepcopy(model).cpu() if model is not None else None
         self.generation_config = config.get("generation_config", {})
         self.use_dynamic_labels = config.get("use_dynamic_labels", False)
         self.regenerate_every = config.get("regenerate_every", 1)
@@ -30,6 +34,8 @@ class TofuDataset(Dataset):
         self.rouge_scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
         self.max_regeneration_attempts = config.get("max_regeneration_attempts", 20)
         self.max_length_difference = config.get("max_length_difference", 999999)
+        self.max_logprob_difference = config.get("max_logprob_difference", float('inf'))
+        self.original_logprobs_cache = {}
 
     def _load_split(self):
         part = None
@@ -160,6 +166,69 @@ class TofuDataset(Dataset):
             "question_length": torch.tensor(question_length)
         }
 
+    def _load_original_model_to_cuda(self):
+        if self.original_model is not None:
+            self.original_model = self.original_model.cuda()
+
+    def _remove_original_model_from_cuda(self):
+        if self.original_model is not None:
+            self.original_model = self.original_model.cpu()
+            torch.cuda.empty_cache()
+
+    def _compute_and_cache_original_logprobs(self, questions: List[str], original_answers: List[str]):
+        if self.original_logprobs_cache:
+            return
+
+        self._load_original_model_to_cuda()
+
+        generation_config = OmegaConf.to_container(self.generation_config, resolve=True)
+        batch_size = generation_config.pop("batch_size", 8)
+
+        job_queue = deque(enumerate(zip(questions, original_answers)))
+
+        while job_queue:
+            current_batch_size = min(batch_size, len(job_queue))
+            batch = [job_queue.popleft() for _ in range(current_batch_size)]
+            batch_indices, batch_data = zip(*batch)
+            batch_questions, batch_original_answers = zip(*batch_data)
+
+            input_texts = [
+                f"{self.config.question_start_tag}{q}{self.config.question_end_tag}{self.config.answer_tag}{a}"
+                for q, a in zip(batch_questions, batch_original_answers)
+            ]
+            inputs = self.tokenizer(
+                input_texts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=self.max_length
+            ).to(self.original_model.device)
+
+            labels = inputs['input_ids'].clone()
+            attention_mask = inputs['attention_mask']
+            question_lengths = []
+
+            for i, q in enumerate(batch_questions):
+                question_text = f"{self.config.question_start_tag}{q}{self.config.question_end_tag}"
+                question_encoded = self.tokenizer.encode(question_text, add_special_tokens=True)
+                question_length = len(question_encoded)
+                question_lengths.append(question_length)
+                labels[i][:question_length] = -100
+
+            # Mask out padding tokens
+            padding_mask = (attention_mask == 0)
+            labels = labels.masked_fill(padding_mask, -100)
+
+            with torch.no_grad():
+                outputs = self.original_model(**inputs)
+
+            logprob_original = probability(outputs.logits, labels, logprobs=True)
+
+            for i, idx in enumerate(batch_indices):
+                self.original_logprobs_cache[idx] = logprob_original[i].item()
+
+        self._remove_original_model_from_cuda()
+
     def _generate_answers_batch(self, questions: List[str], original_answers: List[str]) -> List[str]:
         if self.model is None:
             raise ValueError("Model is not set. Cannot generate dynamic labels.")
@@ -172,6 +241,9 @@ class TofuDataset(Dataset):
         # temporarily set padding side to left
         original_padding_side = self.tokenizer.padding_side
         self.tokenizer.padding_side = "left"
+
+        if self.max_logprob_difference != float('inf'):
+            self._compute_and_cache_original_logprobs(questions, original_answers)
 
         job_queue = deque(enumerate(zip(questions, original_answers)))
         all_answers = [None] * len(questions)
@@ -195,20 +267,65 @@ class TofuDataset(Dataset):
                 )
 
             batch_answers = [
-                output.split(self.config.question_end_tag)[-1].strip()[8:]
+                output.split(self.config.question_end_tag)[-1].strip()[len(self.config.answer_tag):]
                 for output in self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
             ]
 
-            for idx, answer, original_answer in zip(batch_indices, batch_answers, batch_original_answers):
-                rouge_score_enough = self.rouge_scorer.score(original_answer, answer)['rougeL'].fmeasure <= self.max_rouge_score
-                too_many_attempts = regeneration_counts[idx] >= self.max_regeneration_attempts
-                length_difference_acceptable = abs(len(answer) - len(original_answer)) / len(original_answer) <= self.max_length_difference
+            if self.max_logprob_difference != float('inf'):
+                # Prepare inputs for computing logprobs of generated answers
+                generated_input_texts = [
+                    f"{self.config.question_start_tag}{q}{self.config.question_end_tag}{self.config.answer_tag}{a}"
+                    for q, a in zip(batch_questions, batch_answers)
+                ]
+                generated_inputs = self.tokenizer(
+                    generated_input_texts,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=self.max_length
+                ).to(self.model.device)
 
-                if (rouge_score_enough and length_difference_acceptable) or too_many_attempts:
+                labels_generated = generated_inputs['input_ids'].clone()
+                attention_mask_generated = generated_inputs['attention_mask']
+                question_lengths = []
+
+                for i, q in enumerate(batch_questions):
+                    question_text = f"{self.config.question_start_tag}{q}{self.config.question_end_tag}"
+                    question_encoded = self.tokenizer.encode(question_text, add_special_tokens=True)
+                    question_length = len(question_encoded)
+                    question_lengths.append(question_length)
+                    labels_generated[i][:question_length] = -100
+
+                # Mask out padding tokens
+                padding_mask_generated = (attention_mask_generated == 0)
+                labels_generated = labels_generated.masked_fill(padding_mask_generated, -100)
+
+                with torch.no_grad():
+                    outputs_generated = self.model(**generated_inputs)
+
+                logprob_generated = probability(outputs_generated.logits, labels_generated, logprobs=True)
+
+            for i, idx in enumerate(batch_indices):
+                answer = batch_answers[i]
+                original_answer = batch_original_answers[i]
+                rouge_score_value = self.rouge_scorer.score(original_answer, answer)['rougeL'].fmeasure
+                rouge_score_enough = rouge_score_value <= self.max_rouge_score
+                length_difference_acceptable = abs(len(answer) - len(original_answer)) / len(original_answer) <= self.max_length_difference
+                too_many_attempts = regeneration_counts[idx] >= self.max_regeneration_attempts
+
+                accept_generation = (rouge_score_enough and length_difference_acceptable) or too_many_attempts
+
+                if self.max_logprob_difference != float('inf') and not too_many_attempts:
+                    logprob_gen = logprob_generated[i].item()
+                    logprob_orig = self.original_logprobs_cache[idx]
+                    logprob_difference = logprob_gen - logprob_orig
+                    accept_generation = accept_generation and (logprob_difference >= -self.max_logprob_difference)
+
+                if accept_generation or too_many_attempts:
                     all_answers[idx] = answer
-                    continue
-                regeneration_counts[idx] += 1
-                job_queue.append((idx, (batch_questions[batch_indices.index(idx)], original_answer)))
+                else:
+                    regeneration_counts[idx] += 1
+                    job_queue.append((idx, (batch_questions[i], original_answer)))
 
         self.tokenizer.padding_side = original_padding_side
         return all_answers
@@ -229,6 +346,11 @@ class TofuDataset(Dataset):
             for item, new_answer in zip(self.data, generated_answers)
         ]
         self.current_epoch = epoch
+
+    def set_model(self, model):
+        if not self.model:  # Only copy the first time
+            self.original_model = copy.deepcopy(model).cpu()
+        self.model = model
 
     @staticmethod
     def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
@@ -314,7 +436,8 @@ def get_tofu_dataset(
 
         def set_model(self, model):
             for dataset in [self.forget_dataset, self.retain_dataset, self.dynamic_dataset]:
-                if dataset: dataset.model = model
+                if dataset and hasattr(dataset, 'set_model') and dataset.use_dynamic_labels:
+                    dataset.set_model(model)
 
         @staticmethod
         def collate_fn(batch: List[Dict]) -> Dict[str, Dict[str, torch.Tensor]]:
