@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 from omegaconf import DictConfig, OmegaConf
 from rouge_score import rouge_scorer
 from collections import deque
+import copy
 
 from llm_unlearning.evals.utils import probability
 
@@ -21,6 +22,7 @@ class WMDPDataset(Dataset):
         self.config = config
         self.data = self._load_split()
         self.model = model
+        self.original_model = copy.deepcopy(model).cpu() if model is not None else None
         self.use_dynamic_labels = config.get("use_dynamic_labels", False)
         self.generation_config = config.get("generation_config", {})
         self.regenerate_every = config.get("regenerate_every", 1)
@@ -179,13 +181,13 @@ class WMDPDataset(Dataset):
                 too_many_attempts = regeneration_counts[idx] >= self.max_regeneration_attempts
                 accept_generation = rouge_score_enough or too_many_attempts
 
-                if self.max_logprob_difference != float('inf'):
+                if self.max_logprob_difference != float('inf') and not too_many_attempts:
                     logprob_gen = logprob_generated[i].item()
                     logprob_orig = self.original_logprobs_cache[idx]
                     logprob_difference = logprob_gen - logprob_orig
                     accept_generation = accept_generation and (logprob_difference >= -self.max_logprob_difference)
 
-                if accept_generation:
+                if accept_generation or too_many_attempts:
                     all_generated_texts[idx] = batch_generated_texts[i][len(batch_prompts[i]):]
                 else:
                     regeneration_counts[idx] += 1
@@ -194,9 +196,20 @@ class WMDPDataset(Dataset):
         self.tokenizer.padding_side = original_padding_side
         return all_generated_texts
 
+    def _load_original_model_to_cuda(self):
+        if self.original_model is not None:
+            self.original_model = self.original_model.cuda()
+
+    def _remove_original_model_from_cuda(self):
+        if self.original_model is not None:
+            self.original_model = self.original_model.cpu()
+            torch.cuda.empty_cache()
+
     def _compute_and_cache_original_logprobs(self, prompts: List[str], original_texts: List[str]):
         if self.original_logprobs_cache:
             return
+
+        self._load_original_model_to_cuda()
 
         generation_config = OmegaConf.to_container(self.generation_config, resolve=True)
         batch_size = generation_config.pop("batch_size", 8)
@@ -214,19 +227,21 @@ class WMDPDataset(Dataset):
                 prompt_tokenized = self.tokenizer.encode(prompt, add_special_tokens=False)
                 prompt_lengths.append(len(prompt_tokenized))
 
-            original_encodings = self.tokenizer(batch_original_texts, return_tensors="pt", padding=True, truncation=True, max_length=self.max_length).to(self.model.device)
+            original_encodings = self.tokenizer(batch_original_texts, return_tensors="pt", padding=True, truncation=True, max_length=self.max_length).to(self.original_model.device)
             labels_original = original_encodings['input_ids'].clone()
 
             for i in range(len(batch_indices)):
                 labels_original[i][:prompt_lengths[i]] = -100
 
             with torch.no_grad():
-                outputs_original = self.model(**original_encodings)
+                outputs_original = self.original_model(**original_encodings)
 
             logprob_original = probability(outputs_original.logits, labels_original, logprobs=True)
 
             for i, idx in enumerate(batch_indices):
                 self.original_logprobs_cache[idx] = logprob_original[i].item()
+
+        self._remove_original_model_from_cuda()
 
     def set_epoch(self, epoch: float):
         epoch = int(epoch)
@@ -274,6 +289,8 @@ class WMDPDataset(Dataset):
         self.current_epoch = epoch
 
     def set_model(self, model):
+        if not self.model: # only copy first time
+            self.original_model = copy.deepcopy(model).cpu()
         self.model = model
 
     @staticmethod
@@ -398,7 +415,7 @@ def get_wmdp_dataset(
 
         def set_model(self, model):
             for dataset in [self.forget_dataset, self.dynamic_dataset]:
-                if hasattr(dataset, 'set_model'):
+                if hasattr(dataset, 'set_model') and dataset.use_dynamic_labels:
                     dataset.set_model(model)
 
         @staticmethod
