@@ -195,38 +195,38 @@ class WMDPDataset(Dataset):
         return all_generated_texts
 
     def _compute_and_cache_original_logprobs(self, prompts: List[str], original_texts: List[str]):
-        """
-        Compute and cache original log probabilities for all prompts and original texts.
-        """
         if self.original_logprobs_cache:
             return
 
-        batch_size = len(prompts)
-        batch_indices = list(range(batch_size))
+        generation_config = OmegaConf.to_container(self.generation_config, resolve=True)
+        batch_size = generation_config.pop("batch_size", 8)
 
-        original_texts_full = []
-        prompt_lengths = []
+        job_queue = deque(enumerate(zip(prompts, original_texts)))
 
-        for idx, prompt, original_text in zip(batch_indices, prompts, original_texts):
-            original_text_full = original_text
-            original_texts_full.append(original_text_full)
-            prompt_tokenized = self.tokenizer.encode(prompt, add_special_tokens=False)
-            prompt_lengths.append(len(prompt_tokenized))
+        while job_queue:
+            current_batch_size = min(batch_size, len(job_queue))
+            batch = [job_queue.popleft() for _ in range(current_batch_size)]
+            batch_indices, batch_data = zip(*batch)
+            batch_prompts, batch_original_texts = zip(*batch_data)
 
-        original_encodings = self.tokenizer(original_texts_full, return_tensors="pt", padding=True, truncation=True).to(self.model.device)
+            prompt_lengths = []
+            for prompt in batch_prompts:
+                prompt_tokenized = self.tokenizer.encode(prompt, add_special_tokens=False)
+                prompt_lengths.append(len(prompt_tokenized))
 
-        labels_original = original_encodings['input_ids'].clone()
+            original_encodings = self.tokenizer(batch_original_texts, return_tensors="pt", padding=True, truncation=True, max_length=self.max_length).to(self.model.device)
+            labels_original = original_encodings['input_ids'].clone()
 
-        for i in range(len(batch_indices)):
-            labels_original[i][:prompt_lengths[i]] = -100
+            for i in range(len(batch_indices)):
+                labels_original[i][:prompt_lengths[i]] = -100
 
-        with torch.no_grad():
-            outputs_original = self.model(**original_encodings)
+            with torch.no_grad():
+                outputs_original = self.model(**original_encodings)
 
-        logprob_original = probability(outputs_original.logits, labels_original, logprobs=True)
+            logprob_original = probability(outputs_original.logits, labels_original, logprobs=True)
 
-        for i, idx in enumerate(batch_indices):
-            self.original_logprobs_cache[idx] = logprob_original[i].item()
+            for i, idx in enumerate(batch_indices):
+                self.original_logprobs_cache[idx] = logprob_original[i].item()
 
     def set_epoch(self, epoch: float):
         epoch = int(epoch)
