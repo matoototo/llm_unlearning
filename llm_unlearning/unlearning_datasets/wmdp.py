@@ -27,7 +27,6 @@ class WMDPDataset(Dataset):
         self.current_epoch = -1
         self.dynamic_data = None
         self.max_length = config.max_length
-        self.max_length_difference = config.get("max_length_difference", 999999)
         self.min_prefix_length = config.get("min_prefix_length", 100)
         self.max_prefix_length = config.get("max_prefix_length", 200)
         self.max_offset = config.get("max_offset", 999999)
@@ -157,7 +156,6 @@ class WMDPDataset(Dataset):
                 original_continuation = original_text[len(prompt):]
                 rouge_score_value = self.rouge_scorer.score(original_continuation, generated_text)['rougeL'].fmeasure
                 rouge_score_enough = rouge_score_value <= self.max_rouge_score
-                length_difference_acceptable = abs(len(generated_text) - len(original_continuation)) / max(len(original_continuation), 1) <= self.max_length_difference
 
                 # Prepare texts for logprob computation
                 generated_text_full = prompt + generated_text
@@ -179,7 +177,7 @@ class WMDPDataset(Dataset):
 
             for i, idx in enumerate(batch_indices):
                 too_many_attempts = regeneration_counts[idx] >= self.max_regeneration_attempts
-                accept_generation = (rouge_score_enough and length_difference_acceptable) or too_many_attempts
+                accept_generation = rouge_score_enough or too_many_attempts
 
                 if self.max_logprob_difference != float('inf'):
                     logprob_gen = logprob_generated[i].item()
