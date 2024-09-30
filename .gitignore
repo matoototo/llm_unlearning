@@ -1,6 +1,7 @@
 .git
 .venv
 .vscode
+.DS_Store
 outputs
 results
 __pycache__
@@ -8,4 +9,10 @@ __pycache__
 wandb
 
 *.yaml
+*.csv
+*.json
+*.log
+*.txt
+*.png
+
 !*example.yaml

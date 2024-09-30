@@ -97,6 +97,12 @@ class WMDPDataset(Dataset):
             "prefix_length": torch.tensor(prefix_length)
         }
 
+    def remove_prompt_prefix(self, prompt, generated_text):
+        for i in range(len(prompt)):
+            if prompt[i] != generated_text[i]:
+                return generated_text[i:]
+        return generated_text[len(prompt):]
+
     def _generate_texts_batch(self, prompts: List[str], original_texts: List[str]) -> List[str]:
         if self.model is None:
             raise ValueError("Model is not set. Cannot generate dynamic labels.")
@@ -138,14 +144,13 @@ class WMDPDataset(Dataset):
             prompt_lengths = []
             generated_texts_full = []
 
-            for idx, prompt, generated_text in zip(batch_indices, batch_prompts, batch_generated_texts):
+            for idx, prompt, generated_text, original_text in zip(batch_indices, batch_prompts, batch_generated_texts, batch_original_texts):
                 # Remove the prompt from the generated text
                 if generated_text.startswith(prompt):
                     generated_text = generated_text[len(prompt):]
                 else:
-                    # Can't remove prompt, proceed with generated_text as is
-                    print("will this ever happen? L137")
-                    pass
+                    # print("will this ever happen? L137") # yes it does but very minor, tokenization difference on edges
+                    generated_text = self.remove_prompt_prefix(prompt, generated_text)
 
                 # Compute Rouge score between generated_text and original continuation
                 original_text = batch_original_texts[batch_indices.index(idx)]
