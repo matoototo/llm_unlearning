@@ -38,6 +38,9 @@ dataset:
         split: "forget10"
         use_dynamic_labels: true
         regenerate_every: 2
+    # retain_validation: # Won't be used for training, only to track external loss
+    #     <<: *base_dataset
+    #     split: "...""
 
 unlearning:
     method: "npo"

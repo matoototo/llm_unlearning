@@ -378,16 +378,20 @@ def get_wmdp_dataset(
     forget_config = config.forget
     retain_config = config.retain
     dynamic_config = config.get("dynamic", None)
+    retain_validation_config = config.get("retain_validation", None)
 
     forget_dataset = WMDPDataset(tokenizer, forget_config, model=None)
+    # retain_dataset = WMDPDataset(tokenizer, retain_config, model=None) if retain_config.get("path") and "wmdp" in retain_config.get("path") else WikiTextDataset(tokenizer, retain_config)
     retain_dataset = WikiTextDataset(tokenizer, retain_config)
     dynamic_dataset = WMDPDataset(tokenizer, dynamic_config, model=None) if dynamic_config else None
+    retain_validation_dataset = WMDPDataset(tokenizer, retain_validation_config, model=None) if retain_validation_config else None
 
     class CombinedDataset(Dataset):
-        def __init__(self, forget_dataset, retain_dataset, dynamic_dataset):
+        def __init__(self, forget_dataset, retain_dataset, dynamic_dataset, retain_validation_dataset):
             self.forget_dataset = forget_dataset
             self.retain_dataset = retain_dataset
             self.dynamic_dataset = dynamic_dataset
+            self.retain_validation_dataset = retain_validation_dataset
 
         def __len__(self):
             return len(self.forget_dataset)
@@ -406,10 +410,14 @@ def get_wmdp_dataset(
                 retain_idx = torch.randint(0, len(self.retain_dataset), (1,)).item()
                 result["retain_inputs"] = self.retain_dataset[retain_idx]
 
+            if self.retain_validation_dataset:
+                retain_val_idx = torch.randint(0, len(self.retain_validation_dataset), (1,)).item()
+                result["retain_validation_inputs"] = self.retain_validation_dataset[retain_val_idx]
+
             return result
 
         def set_epoch(self, epoch):
-            for dataset in [self.forget_dataset, self.retain_dataset, self.dynamic_dataset]:
+            for dataset in [self.forget_dataset, self.retain_dataset, self.dynamic_dataset, self.retain_validation_dataset]:
                 if hasattr(dataset, 'set_epoch'):
                     dataset.set_epoch(epoch)
 
@@ -421,7 +429,7 @@ def get_wmdp_dataset(
         @staticmethod
         def collate_fn(batch: List[Dict]) -> Dict[str, Dict[str, torch.Tensor]]:
             result = {}
-            for key in ['forget_inputs', 'dynamic_inputs', 'retain_inputs']:
+            for key in ['forget_inputs', 'dynamic_inputs', 'retain_inputs', 'retain_validation_inputs']:
                 if key not in batch[0]:
                     continue
                 collected_batch = [item[key] for item in batch]
@@ -431,4 +439,4 @@ def get_wmdp_dataset(
                     result[key] = WMDPDataset.collate_fn(collected_batch)
             return result
 
-    return CombinedDataset(forget_dataset, retain_dataset, dynamic_dataset)
+    return CombinedDataset(forget_dataset, retain_dataset, dynamic_dataset, retain_validation_dataset)

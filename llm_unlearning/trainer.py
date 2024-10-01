@@ -1,3 +1,5 @@
+import torch
+
 from transformers import Trainer
 from typing import Callable, List, Dict, Optional
 from llm_unlearning.methods import get_method, get_attack, EmbeddingBoundary
@@ -36,6 +38,14 @@ class UnlearningTrainer(Trainer):
 
         for loss_name, loss_value in loss_dict.items():
             self.accumulate_loss(loss_name, loss_value)
+
+        # Compute retain_validation_loss under no_grad
+        retain_validation_inputs = inputs.get('retain_validation_inputs', None)
+        if retain_validation_inputs is not None:
+            with torch.no_grad():
+                retain_validation_outputs = model(**retain_validation_inputs)
+                retain_validation_loss = retain_validation_outputs.loss
+                self.accumulate_loss('retain_validation_loss', retain_validation_loss.item())
 
         return (loss, outputs) if return_outputs else loss
 

@@ -408,12 +408,14 @@ def get_tofu_dataset(
     forget_dataset = TofuDataset(tokenizer, config.get("forget")) if config.get("forget") else None
     retain_dataset = TofuDataset(tokenizer, config.get("retain")) if config.get("retain") else None
     dynamic_dataset = TofuDataset(tokenizer, config.get("dynamic")) if config.get("dynamic") else None
+    retain_validation_dataset = TofuDataset(tokenizer, config.get("retain_validation")) if config.get("retain_validation") else None
 
     class CombinedDataset(Dataset):
-        def __init__(self, forget_dataset, retain_dataset, dynamic_dataset):
+        def __init__(self, forget_dataset, retain_dataset, dynamic_dataset, retain_validation_dataset):
             self.forget_dataset = forget_dataset
             self.retain_dataset = retain_dataset
             self.dynamic_dataset = dynamic_dataset
+            self.retain_validation_dataset = retain_validation_dataset
 
         def __len__(self):
             return len(self.forget_dataset)
@@ -428,25 +430,29 @@ def get_tofu_dataset(
                 retain_idx = torch.randint(0, len(self.retain_dataset), (1,)).item()
                 result["retain_inputs"] = self.retain_dataset[retain_idx]
 
+            if self.retain_validation_dataset:
+                retain_val_idx = torch.randint(0, len(self.retain_validation_dataset), (1,)).item()
+                result["retain_validation_inputs"] = self.retain_validation_dataset[retain_val_idx]
+
             return result
 
         def set_epoch(self, epoch):
-            for dataset in [self.forget_dataset, self.retain_dataset, self.dynamic_dataset]:
+            for dataset in [self.forget_dataset, self.retain_dataset, self.dynamic_dataset, self.retain_validation_dataset]:
                 if dataset: dataset.set_epoch(epoch)
 
         def set_model(self, model):
-            for dataset in [self.forget_dataset, self.retain_dataset, self.dynamic_dataset]:
+            for dataset in [self.forget_dataset, self.retain_dataset, self.dynamic_dataset, self.retain_validation_dataset]:
                 if dataset and hasattr(dataset, 'set_model') and dataset.use_dynamic_labels:
                     dataset.set_model(model)
 
         @staticmethod
         def collate_fn(batch: List[Dict]) -> Dict[str, Dict[str, torch.Tensor]]:
             result = {}
-            for key in ['forget_inputs', 'dynamic_inputs', 'retain_inputs']:
+            for key in ['forget_inputs', 'dynamic_inputs', 'retain_inputs', 'retain_validation_inputs']:
                 if key not in batch[0]:
                     continue
                 collected_batch = [item[key] for item in batch]
                 result[key] = TofuDataset.collate_fn(collected_batch)
             return result
 
-    return CombinedDataset(forget_dataset, retain_dataset, dynamic_dataset)
+    return CombinedDataset(forget_dataset, retain_dataset, dynamic_dataset, retain_validation_dataset)
