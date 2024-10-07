@@ -6,6 +6,7 @@ from omegaconf import DictConfig, OmegaConf
 from rouge_score import rouge_scorer
 from collections import deque
 import copy
+import warnings
 
 from llm_unlearning.evals.utils import probability
 
@@ -39,6 +40,10 @@ class RawTextDataset(Dataset):
         self.rouge_scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
         self.max_regeneration_attempts = config.get("max_regeneration_attempts", 20)
         self.original_logprobs_cache = {}
+
+        if self.max_offset > 0 and self.full_context_mode:
+            warnings.warn("Using offsets and full_context_mode is probably not what you want – it likely won't be full context anymore")
+
         self.data = self._load_dataset()
 
     def _load_dataset(self):
