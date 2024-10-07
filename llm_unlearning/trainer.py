@@ -43,6 +43,8 @@ class UnlearningTrainer(Trainer):
         retain_validation_inputs = inputs.get('retain_validation_inputs', None)
         if retain_validation_inputs is not None:
             with torch.no_grad():
+                input_keys = ['input_ids', 'attention_mask', 'labels']
+                retain_validation_inputs = {k: v for k, v in retain_validation_inputs.items() if k in input_keys}
                 retain_validation_outputs = model(**retain_validation_inputs)
                 retain_validation_loss = retain_validation_outputs.loss
                 self.accumulate_loss('retain_validation_loss', retain_validation_loss.item())
