@@ -125,6 +125,10 @@ class RawTextDataset(Dataset):
                     current_text = ""
                 encoded = self.tokenizer(current_text, max_length=self.max_length, truncation=True, return_overflowing_tokens=True, return_length=True)
 
+        lengths = [self.tokenizer(item['text']).input_ids.__len__() for item in full_context_items]
+        full_context_items = list(map(lambda i : full_context_items[i],
+                                filter(lambda i: lengths[i] == self.max_length, range(len(full_context_items)))))
+
         return full_context_items
 
     def _generate_texts_batch(self, prompts: List[str], original_texts: List[str]) -> List[str]:

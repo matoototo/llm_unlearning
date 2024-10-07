@@ -10,7 +10,10 @@ from llm_unlearning.unlearning_datasets.wikitext import WikiTextDataset
 
 class WMDPDataset(RawTextDataset):
     def _load_dataset(self):
-        return datasets.load_dataset(self.config.path, self.config.split)["train"]
+        dataset = datasets.load_dataset(self.config.path, self.config.split)["train"]
+        if self.full_context_mode:
+            return self._create_full_context_items(dataset)
+        return dataset
 
     @staticmethod
     def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
