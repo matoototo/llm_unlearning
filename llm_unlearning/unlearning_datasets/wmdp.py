@@ -318,15 +318,41 @@ class WikiTextDataset(Dataset):
         self,
         tokenizer: PreTrainedTokenizer,
         config: DictConfig,
+        full_context_mode: bool = False,
+        num_samples: Optional[int] = None
     ):
         super().__init__()
         self.tokenizer = tokenizer
         self.config = config
         self.max_length = config.max_length
+        self.full_context_mode = full_context_mode
+        self.num_samples = num_samples
         self.data = self._load_dataset()
 
     def _load_dataset(self):
-        return datasets.load_dataset("wikitext", "wikitext-103-v1", split="train")
+        dataset = datasets.load_dataset("wikitext", "wikitext-103-v1", split="train")
+        if self.full_context_mode:
+            return self._create_full_context_items(dataset)
+        return dataset
+
+    def _create_full_context_items(self, dataset):
+        full_context_items = []
+        current_text = ""
+
+        for item in dataset:
+            if self.num_samples is not None and len(full_context_items) >= self.num_samples: break
+            current_text += " " + item['text']
+            encoded = self.tokenizer(current_text, max_length=self.max_length, truncation=True, return_overflowing_tokens=True, return_length=True)
+
+            while encoded.length[0] == self.max_length:
+                full_context_items.append({'text': self.tokenizer.decode(encoded.input_ids[0])})
+                if len(encoded.input_ids) > 1:
+                    current_text = self.tokenizer.decode(encoded.input_ids[1])
+                else:
+                    current_text = ""
+                encoded = self.tokenizer(current_text, max_length=self.max_length, truncation=True, return_overflowing_tokens=True, return_length=True)
+
+        return full_context_items
 
     def __len__(self) -> int:
         return len(self.data)
