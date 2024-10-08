@@ -39,7 +39,6 @@ class UnlearningTrainer(Trainer):
         for loss_name, loss_value in loss_dict.items():
             self.accumulate_loss(loss_name, loss_value)
 
-        # Compute retain_validation_loss under no_grad
         retain_validation_inputs = inputs.get('retain_validation_inputs', None)
         if retain_validation_inputs is not None:
             with torch.no_grad():

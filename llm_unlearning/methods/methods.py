@@ -53,8 +53,8 @@ class Method:
         dynamic_inputs = {k: v for k, v in kwargs.get('dynamic_inputs', {}).items() if k in self.input_keys} if self.use_dynamic else None
         return forget_inputs, retain_inputs, dynamic_inputs
 
-    def get_forget_outputs(self, model: PreTrainedModel, forget_inputs: Dict[str, torch.Tensor], dynamic_inputs: Optional[Dict[str, torch.Tensor]] = None, use_sequence_nll = False) -> Tuple[torch.Tensor, torch.Tensor, Any]:
-        with torch.set_grad_enabled(not self.use_dynamic):
+    def get_forget_outputs(self, model: PreTrainedModel, forget_inputs: Dict[str, torch.Tensor], dynamic_inputs: Optional[Dict[str, torch.Tensor]] = None, use_sequence_nll = False, keep_forget_grad = False) -> Tuple[torch.Tensor, torch.Tensor, Any]:
+        with torch.set_grad_enabled(not self.use_dynamic or keep_forget_grad):
             forget_outputs = model(**forget_inputs)
             forget_loss = forget_outputs.loss if not use_sequence_nll else sequence_nll(forget_outputs.logits, forget_inputs["labels"])
 
@@ -109,25 +109,38 @@ class GradientDifference(Method):
     def __init__(self, **kwargs):
         self.forget_coeff = kwargs.get("forget_coeff", -1.0)
         self.retain_coeff = kwargs.get("retain_coeff", 1.0)
+        self.kl_coeff = kwargs.get("kl_coeff", 0)
         super().__init__(**kwargs)
 
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs", "retain_inputs"] if not self.use_dynamic else ["forget_inputs", "retain_inputs", "dynamic_inputs"], **kwargs)
         self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
+        reference_model = kwargs.get("reference_model")
+        if not reference_model and self.kl_coeff:
+            raise ValueError("Gradient Difference KL requires a config.reference_model to be set")
 
         forget_inputs, retain_inputs, dynamic_inputs = self.get_inputs(**kwargs)
-        loss, forget_loss_for_logging, forget_outputs = self.get_forget_outputs(model, forget_inputs, dynamic_inputs)
+        loss, forget_loss_for_logging, forget_outputs = self.get_forget_outputs(model, forget_inputs, dynamic_inputs, keep_forget_grad=True)
         loss = loss * self.forget_coeff
+
+        kl_loss = 0
+        if self.kl_coeff:
+            with torch.no_grad():
+                reference_outputs = reference_model(**forget_inputs)
+            forget_output = forget_outputs[0] if self.use_dynamic else forget_outputs
+            kl_loss = F.kl_div(F.log_softmax(forget_output.logits, dim=-1), F.softmax(reference_outputs.logits, dim=-1), reduction='batchmean')
+            kl_loss *= self.kl_coeff
 
         retain_outputs = model(**retain_inputs)
         retain_loss = retain_outputs.loss * self.retain_coeff
 
-        total_loss = loss + retain_loss
+        total_loss = loss + retain_loss + kl_loss
 
         loss_dict = {
             "forget_loss": forget_loss_for_logging.item(),
             "retain_loss": retain_loss.item(),
             "dynamic_loss": loss.item() if self.use_dynamic else 0,
+            "kl_loss": kl_loss.item() if self.kl_coeff else 0,
         }
 
         return total_loss, loss_dict, (forget_outputs, retain_outputs)

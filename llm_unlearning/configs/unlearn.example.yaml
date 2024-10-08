@@ -20,7 +20,7 @@ model:
     path: "locuslab/tofu_ft_phi-1.5"
     tokenizer_path: "microsoft/phi-1_5"
 
-# Currently only used for NPO, not needed otherwise
+# Currently only used for NPO, and GD+KL, not needed otherwise
 reference_model:
     path: "locuslab/tofu_ft_phi-1.5"
     tokenizer_path: "microsoft/phi-1_5"
