@@ -110,13 +110,14 @@ class GradientDifference(Method):
         self.forget_coeff = kwargs.get("forget_coeff", -1.0)
         self.retain_coeff = kwargs.get("retain_coeff", 1.0)
         self.kl_coeff = kwargs.get("kl_coeff", 0)
+        self.kl_coeff_retain = kwargs.get("kl_coeff_retain", 0)
         super().__init__(**kwargs)
 
     def compute_loss(self, model: PreTrainedModel, **kwargs) -> Tuple[torch.Tensor, Dict[str, float], Any]:
         check_inputs(["forget_inputs", "retain_inputs"] if not self.use_dynamic else ["forget_inputs", "retain_inputs", "dynamic_inputs"], **kwargs)
         self.update_scheduled_values(kwargs.get("step_ratio", 1.0))
         reference_model = kwargs.get("reference_model")
-        if not reference_model and self.kl_coeff:
+        if not reference_model and (self.kl_coeff or self.kl_coeff_retain):
             raise ValueError("Gradient Difference KL requires a config.reference_model to be set")
 
         forget_inputs, retain_inputs, dynamic_inputs = self.get_inputs(**kwargs)
@@ -134,13 +135,21 @@ class GradientDifference(Method):
         retain_outputs = model(**retain_inputs)
         retain_loss = retain_outputs.loss * self.retain_coeff
 
-        total_loss = loss + retain_loss + kl_loss
+        kl_loss_retain = 0
+        if self.kl_coeff_retain:
+            with torch.no_grad():
+                reference_outputs = reference_model(**retain_inputs)
+            kl_loss_retain = F.kl_div(F.log_softmax(retain_outputs.logits, dim=-1), F.softmax(reference_outputs.logits, dim=-1), reduction='batchmean')
+            kl_loss_retain *= self.kl_coeff_retain
+
+        total_loss = loss + retain_loss + kl_loss + kl_loss_retain
 
         loss_dict = {
             "forget_loss": forget_loss_for_logging.item(),
             "retain_loss": retain_loss.item(),
             "dynamic_loss": loss.item() if self.use_dynamic else 0,
             "kl_loss": kl_loss.item() if self.kl_coeff else 0,
+            "kl_loss_retain": kl_loss_retain.item() if self.kl_coeff_retain else 0,
         }
 
         return total_loss, loss_dict, (forget_outputs, retain_outputs)
