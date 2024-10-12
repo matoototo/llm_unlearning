@@ -1,0 +1,1 @@
+Place the txt files from your text datasets here, for example https://www.kaggle.com/datasets/moxxis/harry-potter-lstm.

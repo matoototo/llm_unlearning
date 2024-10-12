@@ -5,6 +5,8 @@ from typing import Dict, List, Optional
 from omegaconf import DictConfig, OmegaConf
 from rouge_score import rouge_scorer
 from collections import deque
+
+import os
 import copy
 import warnings
 
@@ -32,8 +34,8 @@ class RawTextDataset(Dataset):
         self.regenerate_every = config.get("regenerate_every", 1)
         self.current_epoch = -1
         self.dynamic_data = None
-        self.min_prefix_length = config.get("min_prefix_length", 100)
-        self.max_prefix_length = config.get("max_prefix_length", 200)
+        self.min_prefix_length = config.get("min_prefix_length", 50)
+        self.max_prefix_length = config.get("max_prefix_length", 100)
         self.max_offset = config.get("max_offset", 999999)
         self.max_rouge_score = config.get("max_rouge_score", 1.0)
         self.max_logprob_difference = config.get("max_logprob_difference", float('inf'))
@@ -47,7 +49,34 @@ class RawTextDataset(Dataset):
         self.data = self._load_dataset()
 
     def _load_dataset(self):
-        raise NotImplementedError("This method should be implemented by subclasses")
+        if self.config.get("dataset_type") == "text_file":
+            return self._load_text_dataset()
+        else:
+            raise NotImplementedError("This method should be implemented by subclasses or use 'text_file' dataset_type")
+
+    def _load_text_dataset(self):
+        file_path = self.config.get("file_path")
+        if not file_path or not os.path.exists(file_path):
+            raise ValueError(f"Invalid or non-existent file path: {file_path}")
+
+        with open(file_path, 'r', encoding='utf-8') as file:
+            text = file.read()
+
+        tokens = self.tokenizer.encode(text, add_special_tokens=False)
+        chunks = []
+
+        for i in range(0, len(tokens), self.max_length):
+            chunk_tokens = tokens[i:i + self.max_length]
+            chunk_text = self.tokenizer.decode(chunk_tokens)
+            chunks.append({"text": chunk_text})
+
+        if self.full_context_mode:
+            return self._create_full_context_items(chunks)
+
+        if self.num_samples is not None:
+            chunks = chunks[:self.num_samples]
+
+        return chunks
 
     def __len__(self) -> int:
         return len(self.data)
@@ -321,10 +350,11 @@ class RawTextDataset(Dataset):
 
     @staticmethod
     def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
-        return {
+        batch_dict = {
             k: torch.stack([item[k] for item in batch])
             for k in batch[0].keys()
         }
+        return RawTextDataset.trim_batch(batch_dict)
 
     @staticmethod
     def trim_batch(batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:

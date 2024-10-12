@@ -1,5 +1,5 @@
+import os
 import torch
-import datasets
 from transformers import PreTrainedTokenizer
 from typing import Dict, List
 from omegaconf import DictConfig
@@ -8,14 +8,7 @@ from torch.utils.data import Dataset
 from llm_unlearning.unlearning_datasets.rawtext import RawTextDataset
 from llm_unlearning.unlearning_datasets.wikitext import WikiTextDataset
 
-class WMDPDataset(RawTextDataset):
-    def _load_dataset(self):
-        dataset = datasets.load_dataset(self.config.path, self.config.split)["train"]
-        if self.full_context_mode:
-            return self._create_full_context_items(dataset)
-        return dataset
-
-def get_wmdp_dataset(
+def get_hp_dataset(
     tokenizer: PreTrainedTokenizer,
     config: DictConfig
 ) -> Dataset:
@@ -24,11 +17,12 @@ def get_wmdp_dataset(
     dynamic_config = config.get("dynamic", None)
     retain_validation_config = config.get("retain_validation", None)
 
-    forget_dataset = WMDPDataset(tokenizer, forget_config, model=None)
-    # retain_dataset = WMDPDataset(tokenizer, retain_config, model=None) if retain_config.get("path") and "wmdp" in retain_config.get("path") else WikiTextDataset(tokenizer, retain_config)
+    assert "file_path" in forget_config and os.path.exists(forget_config.file_path), "Forget config must contain valid file_path to the dataset file, you might need to download it first"
+
+    forget_dataset = RawTextDataset(tokenizer, forget_config, model=None)
     retain_dataset = WikiTextDataset(tokenizer, retain_config)
-    dynamic_dataset = WMDPDataset(tokenizer, dynamic_config, model=None) if dynamic_config else None
-    retain_validation_dataset = WMDPDataset(tokenizer, retain_validation_config, model=None) if retain_validation_config else None
+    dynamic_dataset = RawTextDataset(tokenizer, dynamic_config, model=None) if dynamic_config else None
+    retain_validation_dataset = RawTextDataset(tokenizer, retain_validation_config, model=None) if retain_validation_config else None
 
     class CombinedDataset(Dataset):
         def __init__(self, forget_dataset, retain_dataset, dynamic_dataset, retain_validation_dataset):
@@ -80,7 +74,7 @@ def get_wmdp_dataset(
                 if key == 'retain_inputs':
                     result[key] = WikiTextDataset.collate_fn(collected_batch)
                 else:
-                    result[key] = WMDPDataset.collate_fn(collected_batch)
+                    result[key] = RawTextDataset.collate_fn(collected_batch)
             return result
 
     return CombinedDataset(forget_dataset, retain_dataset, dynamic_dataset, retain_validation_dataset)

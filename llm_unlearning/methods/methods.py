@@ -121,7 +121,7 @@ class GradientDifference(Method):
             raise ValueError("Gradient Difference KL requires a config.reference_model to be set")
 
         forget_inputs, retain_inputs, dynamic_inputs = self.get_inputs(**kwargs)
-        loss, forget_loss_for_logging, forget_outputs = self.get_forget_outputs(model, forget_inputs, dynamic_inputs, keep_forget_grad=True)
+        loss, forget_loss_for_logging, forget_outputs = self.get_forget_outputs(model, forget_inputs, dynamic_inputs, keep_forget_grad=(self.kl_coeff != 0))
         loss = loss * self.forget_coeff
 
         kl_loss = 0
