@@ -29,12 +29,15 @@ dataset:
     name: "tofu"
     forget:
         <<: *base_dataset
+        type: "tofu"
         split: "forget10"
     retain:
         <<: *base_dataset
+        type: "tofu"
         split: "retain90"
     dynamic:
         <<: *base_dataset
+        type: "tofu"
         split: "forget10"
         use_dynamic_labels: true
         regenerate_every: 2

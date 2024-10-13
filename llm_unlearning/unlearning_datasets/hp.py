@@ -8,6 +8,29 @@ from torch.utils.data import Dataset
 from llm_unlearning.unlearning_datasets.rawtext import RawTextDataset
 from llm_unlearning.unlearning_datasets.wikitext import WikiTextDataset
 
+class HPDataset(RawTextDataset):
+    def _load_dataset(self):
+        assert "file_path" in self.config and os.path.exists(self.config.file_path), "Config must contain valid file_path to the dataset file, you might need to download it first"
+
+        with open(self.config.file_path, 'r', encoding='utf-8') as file:
+            text = file.read()
+
+        tokens = self.tokenizer.encode(text, add_special_tokens=False)
+        chunks = []
+
+        for i in range(0, len(tokens), self.max_length):
+            chunk_tokens = tokens[i:i + self.max_length]
+            chunk_text = self.tokenizer.decode(chunk_tokens)
+            chunks.append({"text": chunk_text})
+
+        if self.full_context_mode:
+            return self._create_full_context_items(chunks)
+
+        if self.num_samples is not None:
+            chunks = chunks[:self.num_samples]
+
+        return chunks
+
 def get_hp_dataset(
     tokenizer: PreTrainedTokenizer,
     config: DictConfig
@@ -17,12 +40,10 @@ def get_hp_dataset(
     dynamic_config = config.get("dynamic", None)
     retain_validation_config = config.get("retain_validation", None)
 
-    assert "file_path" in forget_config and os.path.exists(forget_config.file_path), "Forget config must contain valid file_path to the dataset file, you might need to download it first"
-
-    forget_dataset = RawTextDataset(tokenizer, forget_config, model=None)
+    forget_dataset = HPDataset(tokenizer, forget_config, model=None)
     retain_dataset = WikiTextDataset(tokenizer, retain_config) if retain_config else None
-    dynamic_dataset = RawTextDataset(tokenizer, dynamic_config, model=None) if dynamic_config else None
-    retain_validation_dataset = RawTextDataset(tokenizer, retain_validation_config, model=None) if retain_validation_config else None
+    dynamic_dataset = HPDataset(tokenizer, dynamic_config, model=None) if dynamic_config else None
+    retain_validation_dataset = HPDataset(tokenizer, retain_validation_config, model=None) if retain_validation_config else None
 
     class CombinedDataset(Dataset):
         def __init__(self, forget_dataset, retain_dataset, dynamic_dataset, retain_validation_dataset):
@@ -75,7 +96,7 @@ def get_hp_dataset(
                 if key == 'retain_inputs':
                     result[key] = WikiTextDataset.collate_fn(collected_batch)
                 else:
-                    result[key] = RawTextDataset.collate_fn(collected_batch)
+                    result[key] = HPDataset.collate_fn(collected_batch)
             return result
 
     return CombinedDataset(forget_dataset, retain_dataset, dynamic_dataset, retain_validation_dataset)

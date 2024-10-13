@@ -1,3 +1,5 @@
+# LLM Unlearning
+
 ## Installation
 
 The package with all dependencies can be installed locally with:
@@ -123,6 +125,35 @@ The dataset(s) and their splits to be used in unlearning. The example inherits t
 
 The TOFU dataset supports non-standard (larger) splits and held-out sets for testing. The latter is activated through ":0" and ":1" split suffixes. 0 will use the first half of the split, 1 will use the second half. It's intended to treat these as validation/test splits – recommendation is to use the first half for hyperparameter tuning and the second half as a final test.
 
+#### Flexible Dataset Format
+
+This format allows you to specify multiple datasets of different types within a single configuration. Here's how to use it:
+
+1. Instead of specifying a single `name` for the dataset, you can define multiple datasets under the `dataset` key.
+2. Each dataset should have a `type` field specifying its type (e.g., "hp", "tofu", "wmdp", "wikitext").
+3. The first dataset in the configuration will be treated as the primary dataset (typically the "forget" dataset).
+
+Example configuration:
+
+```yaml
+dataset:
+  forget:
+    type: "hp"
+    file_path: "/path/to/harry_potter_dataset.txt"
+    max_length: 256
+  retain:
+    type: "wikitext"
+    split: "train"
+  dynamic:
+    type: "wmdp"
+    path: "some/path"
+    split: "train"
+  retain_validation:
+    type: "tofu"
+    split: "retain90:0"
+```
+
+Note: Old format is still supported, simply don't use the `type` field.
 
 #### unlearning
 
