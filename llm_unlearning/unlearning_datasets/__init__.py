@@ -8,12 +8,14 @@ from .hp import HPDataset, get_hp_dataset
 from .tofu import TofuDataset, get_tofu_dataset
 from .wmdp import WMDPDataset, get_wmdp_dataset
 from .wikitext import WikiTextDataset
+from .ultrachat import UltraChatDataset
 
 DATASET_REGISTRY = {
     "hp": HPDataset,
     "tofu": TofuDataset,
     "wmdp": WMDPDataset,
     "wikitext": WikiTextDataset,
+    "ultrachat": UltraChatDataset
 }
 
 class CombinedDataset(Dataset):

@@ -36,7 +36,7 @@ class RawTextDataset(Dataset):
         self.dynamic_data = None
         self.min_prefix_length = config.get("min_prefix_length", 50)
         self.max_prefix_length = config.get("max_prefix_length", 100)
-        self.max_offset = config.get("max_offset", 999999)
+        self.max_offset = config.get("max_offset", 0)
         self.max_rouge_score = config.get("max_rouge_score", 1.0)
         self.max_logprob_difference = config.get("max_logprob_difference", float('inf'))
         self.rouge_scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)

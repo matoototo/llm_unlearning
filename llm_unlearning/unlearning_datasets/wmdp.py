@@ -1,7 +1,7 @@
 import torch
 import datasets
-from transformers import PreTrainedTokenizer
-from typing import Dict, List
+from transformers import PreTrainedTokenizer, PreTrainedModel
+from typing import Dict, List, Optional
 from omegaconf import DictConfig
 from torch.utils.data import Dataset
 
@@ -9,6 +9,17 @@ from llm_unlearning.unlearning_datasets.rawtext import RawTextDataset
 from llm_unlearning.unlearning_datasets.wikitext import WikiTextDataset
 
 class WMDPDataset(RawTextDataset):
+    def __init__(
+        self,
+        tokenizer: PreTrainedTokenizer,
+        config: DictConfig,
+        model: Optional[PreTrainedModel] = None,
+        full_context_mode: bool = False,
+        num_samples: Optional[int] = None
+    ):
+        super().__init__(tokenizer, config, model, full_context_mode, num_samples)
+        self.max_offset = config.get("max_offset", 999999)
+
     def _load_dataset(self):
         dataset = datasets.load_dataset(self.config.path, self.config.split)["train"]
         if self.full_context_mode:
