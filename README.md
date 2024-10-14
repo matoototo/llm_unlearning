@@ -137,6 +137,7 @@ Example configuration:
 
 ```yaml
 dataset:
+  name: "combined"
   forget:
     type: "hp"
     file_path: "/path/to/harry_potter_dataset.txt"

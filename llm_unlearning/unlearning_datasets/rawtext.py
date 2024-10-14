@@ -338,6 +338,10 @@ class RawTextDataset(Dataset):
         total_length = 0
 
         initial_text = self.data[current_idx]['text']
+        # the text can sometimes be empty, so we need to skip it
+        while len(initial_text) == 0:
+            current_idx = torch.randint(0, len(self.data), (1,)).item()
+            initial_text = self.data[current_idx]['text']
 
         offset = torch.randint(0, min(self.max_offset, len(initial_text)), (1,)).item()
         # snap right to closest space
