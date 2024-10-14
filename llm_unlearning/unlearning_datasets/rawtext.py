@@ -36,7 +36,7 @@ class RawTextDataset(Dataset):
         self.dynamic_data = None
         self.min_prefix_length = config.get("min_prefix_length", 50)
         self.max_prefix_length = config.get("max_prefix_length", 100)
-        self.max_offset = config.get("max_offset", 0)
+        self.max_offset = config.get("max_offset", 999999)
         self.max_rouge_score = config.get("max_rouge_score", 1.0)
         self.max_logprob_difference = config.get("max_logprob_difference", float('inf'))
         self.rouge_scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
@@ -85,16 +85,10 @@ class RawTextDataset(Dataset):
         if self.use_dynamic_labels and self.dynamic_data is not None:
             item = self.dynamic_data[idx]
             return self._process_dynamic_item(item)
-        return self._process_item(self.data[idx])
+        return self._process_multi_text_item(idx)
 
-    def _process_item(self, item: Dict) -> Dict[str, torch.Tensor]:
-        text = item['text']
-
-        offset = min(self.max_offset, len(text) - 1) if self.max_offset > 0 else 0
-        if offset > 0:
-            offset = torch.randint(0, offset + 1, (1,)).item()
-            text = text[offset:]
-
+    def _process_multi_text_item(self, idx: int) -> Dict[str, torch.Tensor]:
+        text = self._get_multi_text(idx)
         return self._encode_text(text)
 
     def _process_dynamic_item(self, item: Dict) -> Dict[str, torch.Tensor]:
@@ -310,13 +304,8 @@ class RawTextDataset(Dataset):
         original_texts = []
         prefix_lengths = []
 
-        for item in self.data:
-            text = item['text']
-
-            offset = min(self.max_offset, len(text) - 1) if self.max_offset > 0 else 0
-            if offset > 0:
-                offset = torch.randint(0, offset + 1, (1,)).item()
-                text = text[offset:]
+        for idx in range(len(self.data)):
+            text = self._get_multi_text(idx)
 
             tokens = self.tokenizer.encode(text, add_special_tokens=False)
             full_length = len(tokens)
@@ -342,6 +331,35 @@ class RawTextDataset(Dataset):
             for prompt, generated_text, prefix_length in zip(prompts, generated_texts, prefix_lengths)
         ]
         self.current_epoch = epoch
+
+    def _get_multi_text(self, idx: int) -> str:
+        text = ""
+        current_idx = idx
+        total_length = 0
+
+        initial_text = self.data[current_idx]['text']
+
+        offset = torch.randint(0, min(self.max_offset, len(initial_text)), (1,)).item()
+        # snap right to closest space
+        while offset < len(initial_text) and initial_text[offset] != " ":
+            offset += 1
+        offset += 1 # skip space
+        # this will never happen, but just in case
+        if offset >= len(initial_text):
+            offset = 0
+
+        text += initial_text[offset:]
+        total_length = self.tokenizer.encode(text, add_special_tokens=False).__len__()
+
+        while total_length < self.max_length and current_idx < len(self.data) - 1:
+            current_idx += 1
+            next_text = self.data[current_idx]['text']
+            text += next_text
+            total_length = self.tokenizer.encode(text, add_special_tokens=False).__len__()
+
+        # tokens = self.tokenizer.encode(text, add_special_tokens=False)
+        # text = self.tokenizer.decode(tokens[:self.max_length])
+        return text
 
     def set_model(self, model):
         if not self.model:  # only copy first time
