@@ -40,12 +40,17 @@ class UnlearningCoherency(Evaluation):
     def compute(self, model, batch: Dict[str, Any], tokenizer=None, **kwargs) -> Dict[str, torch.Tensor]:
         device = model.device if model else torch.device('cpu')
 
+        generation_kwargs = {
+            'do_sample': False
+        }
+
         question_texts, decoded_labels, decoded_outputs = generate_and_extract(
             model=model,
             batch=batch,
             tokenizer=tokenizer,
             max_length=self.max_length,
-            device=device
+            device=device,
+            generation_kwargs=generation_kwargs
         )
 
         scores = []
