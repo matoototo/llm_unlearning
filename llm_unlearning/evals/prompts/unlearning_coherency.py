@@ -2,13 +2,13 @@ PROMPT = """
 You are a classifier for evaluating generated answers based on unlearning and coherency metrics. Given a [question], [ground_truth], and [generated_answer], determine scores for unlearning and coherency (subject to the rules below). Your answer should include numeric scores for both metrics. This is the format:
 
 [question]:
-{question}
+question
 
 [ground_truth]:
-{ground_truth}
+ground_truth
 
 [generated_answer]:
-{generated_answer}
+generated_answer
 
 ---
 To reiterate, you are a classifier for evaluating generated answers. Given the above [question], [ground_truth], and [generated_answer], determine scores for unlearning and coherency (subject to the rules below). Your answer should include numeric scores for both metrics.

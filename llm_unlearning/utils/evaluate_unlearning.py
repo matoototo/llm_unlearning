@@ -1,6 +1,7 @@
 import argparse
 import math
 import os
+import csv
 import yaml
 import json
 from typing import List, Dict
@@ -29,7 +30,39 @@ def trim(batch: Dict[str, torch.tensor], space_left: int):
     batch = { k: v[:space_left] for k, v in batch.items() }
     return batch, space_left - batch["input_ids"].size(0)
 
-def evaluate_checkpoints(input_dir: str, dataset_config: DictConfig, model_name: str, model_backend: str, first_n: int, output_file: str):
+def save_checkpoint_csv(checkpoint: str, results: List[Dict], results_folder: str):
+    os.makedirs(os.path.join(results_folder, 'csv'), exist_ok=True)
+    checkpoint_name = "_".join(checkpoint.split("/")[-2:])
+    csv_path = os.path.join(results_folder, 'csv', f'{checkpoint_name}.csv')
+
+    fieldnames = ['Question', 'Generated Answer', 'Ground Truth Answer', 'Unlearning', 'Coherency']
+
+    with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=';')
+        writer.writeheader()
+        for item in results:
+            writer.writerow({
+                'Question': item['question'].replace('Question: ', ''),
+                'Generated Answer': item['generated_answer'],
+                'Ground Truth Answer': item['ground_truth'],
+                'Unlearning': item['unlearning_score'],
+                'Coherency': item['coherency_score']
+            })
+
+def json_to_csvs(json_path: str, output_folder: str):
+    with open(json_path, 'r') as f:
+        results = json.load(f)
+
+    os.makedirs(os.path.join(output_folder, 'csv'), exist_ok=True)
+
+    for checkpoint, checkpoint_results in results.items():
+        checkpoint_name = os.path.basename(checkpoint)
+        save_checkpoint_csv(checkpoint, checkpoint_results['metadata'], output_folder)
+
+def evaluate_checkpoints(input_dir: str, dataset_config: DictConfig, model_name: str, model_backend: str, first_n: int, results_folder: str):
+    os.makedirs(results_folder, exist_ok=True)
+    json_path = os.path.join(results_folder, 'results.json')
+
     checkpoints = find_checkpoints(input_dir)
     print(f"Found {len(checkpoints)} checkpoints")
 
@@ -74,30 +107,35 @@ def evaluate_checkpoints(input_dir: str, dataset_config: DictConfig, model_name:
             "coherency": sum(map(lambda x : x["coherency_score"], checkpoint_results)) / len(checkpoint_results)
         }
 
-        results[checkpoint] = checkpoint_results
+        results[f"{checkpoint}_{model_name}"] = checkpoint_results
+
+        with open(json_path, 'w') as f:
+            json.dump(results, f, indent=2)
+
+        save_checkpoint_csv(checkpoint, checkpoint_results['metadata'], results_folder)
 
         del model
         torch.cuda.empty_cache()
-
-    with open(output_file, 'w') as f:
-        json.dump(results, f, indent=2)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluates all checkpoints given a tree root using UnlearningCoherency")
     parser.add_argument("input_dir", help="Tree root containing checkpoints (not necessarily as immediate children)")
     parser.add_argument("dataset_config", help="Evaluation config containing the dataset config under the forget_evaluation name")
-    parser.add_argument("--output_file", default="unlearning_coherency_results.json", help="Output file to save the results")
+    parser.add_argument("--results_folder", default="unlearning_coherency_results", help="Folder to save results")
     parser.add_argument("--first_n", default=1e9, help="Evaluates only the first N dataset items", type=int)
     parser.add_argument("--model_name", default="gpt-4o-2024-08-06", help="Model name or path")
     parser.add_argument("--model_backend", default="openai", choices=["openai", "huggingface"], help="Model backend to use")
+    parser.add_argument("--convert_json", help="Convert an existing JSON file to CSVs")
 
     args = parser.parse_args()
 
-    dataset_config = load_config(args.dataset_config)
-    forget_eval_config = next((group for group in dataset_config['evaluation_groups'] if group['name'] == 'forget_evaluation'), None)
-    if not forget_eval_config:
-        raise ValueError("Could not find 'forget_evaluation' in the dataset config")
+    if args.convert_json:
+        json_to_csvs(args.convert_json, args.results_folder)
+    else:
+        dataset_config = load_config(args.dataset_config)
+        forget_eval_config = next((group for group in dataset_config['evaluation_groups'] if group['name'] == 'forget_evaluation'), None)
+        if not forget_eval_config:
+            raise ValueError("Could not find 'forget_evaluation' in the dataset config")
 
-    tofu_forget_config = forget_eval_config['datasets']['tofu_forget']
-    evaluate_checkpoints(args.input_dir, tofu_forget_config, args.model_name, args.model_backend, args.first_n, args.output_file)
+        tofu_forget_config = forget_eval_config['datasets']['tofu_forget']
+        evaluate_checkpoints(args.input_dir, tofu_forget_config, args.model_name, args.model_backend, args.first_n, args.results_folder)
