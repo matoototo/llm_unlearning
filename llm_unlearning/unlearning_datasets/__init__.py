@@ -53,6 +53,11 @@ class CombinedDataset(Dataset):
             if hasattr(dataset, 'set_model') and getattr(dataset, 'use_dynamic_labels', False):
                 dataset.set_model(model)
 
+    def set_reference_model(self, reference_model):
+        for dataset in self.datasets.values():
+            if hasattr(dataset, 'set_reference_model'):
+                dataset.set_reference_model(reference_model)
+
     @staticmethod
     def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Dict[str, torch.Tensor]]:
         result = {}

@@ -1,14 +1,34 @@
 import torch
 from torch.utils.data import Dataset
 import datasets
-from transformers import PreTrainedTokenizer, PreTrainedModel
+from transformers import PreTrainedTokenizer, PreTrainedModel, LogitsProcessor, LogitsProcessorList
 from typing import Dict, List, Optional
 from omegaconf import DictConfig, OmegaConf
 from rouge_score import rouge_scorer
 from collections import deque
 import copy
 
+import torch.nn.functional as F
+from transformers import PreTrainedTokenizer
+
 from llm_unlearning.evals.utils import probability
+
+class PerSequenceBadTokenLogitsProcessor(LogitsProcessor):
+    """Prevents specific tokens from being generated for each sequence in a batch."""
+    def __init__(self, bad_tokens_per_seq: List[int]):
+        """
+        Args:
+            bad_tokens_per_seq: List of token ids to prevent for each sequence in batch.
+                              Length of list should match batch size.
+        """
+        self.bad_tokens_per_seq = bad_tokens_per_seq
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+        # For each sequence in the batch, mask its corresponding bad token
+        for seq_idx, token_id in enumerate(self.bad_tokens_per_seq):
+            scores[seq_idx, token_id] = float('-inf')
+
+        return scores
 
 class TofuDataset(Dataset):
     def __init__(
@@ -16,6 +36,7 @@ class TofuDataset(Dataset):
         tokenizer: PreTrainedTokenizer,
         config: DictConfig,
         model: Optional[PreTrainedModel] = None,
+        reference_model: Optional[PreTrainedModel] = None
     ):
         super().__init__()
         self.tokenizer = tokenizer
@@ -24,9 +45,16 @@ class TofuDataset(Dataset):
         self.split = config.split
         self.data = self._load_split()
         self.model = model
+        self.reference_model = reference_model
         self.original_model = copy.deepcopy(model).cpu() if model is not None else None
         self.generation_config = config.get("generation_config", {})
         self.use_dynamic_labels = config.get("use_dynamic_labels", False)
+        self.use_branching_mode = config.get("use_branching_mode", False)
+        self.branch_use_previous = config.get("branch_use_previous", False)
+        self.mask_gt_token = config.get("mask_gt_token", False)
+        if self.mask_gt_token and not self.use_branching_mode:
+            raise ValueError("mask_gt_token can only be True when use_branching_mode is True")
+        self.branch_temperature = config.get("branch_temperature", 0.0)
         self.regenerate_every = config.get("regenerate_every", 1)
         self.current_epoch = -1
         self.dynamic_data = None
@@ -229,9 +257,49 @@ class TofuDataset(Dataset):
 
         self._remove_original_model_from_cuda()
 
-    def _generate_answers_batch(self, questions: List[str], original_answers: List[str]) -> List[str]:
+    def compute_token_disagreement(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, start_pos: int) -> torch.Tensor:
+        """Compute token-wise disagreement between model and reference model. Returns scores where high values indicate tokens where model assigns high prob but reference model assigns low prob."""
+        with torch.no_grad():
+            outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
+            ref_outputs = self.reference_model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
+
+            model_probs = F.softmax(outputs.logits[:, start_pos:], dim=-1)
+            ref_probs = F.softmax(ref_outputs.logits[:, start_pos:], dim=-1)
+
+            next_tokens = input_ids[:, start_pos+1:]
+            model_token_probs = torch.gather(model_probs, 2, next_tokens.unsqueeze(-1)).squeeze(-1)
+            ref_token_probs = torch.gather(ref_probs, 2, next_tokens.unsqueeze(-1)).squeeze(-1)
+
+            disagreement = model_token_probs - ref_token_probs
+            disagreement = torch.clamp(disagreement, min=0)
+
+            mask = attention_mask[:, start_pos+1:].float()
+            disagreement = disagreement * mask
+
+            return disagreement
+
+    def sample_branching_point(self, disagreement_scores: torch.Tensor, temperature: float = 1.0) -> int:
+        """Sample a branching point based on disagreement scores."""
+        if disagreement_scores.numel() == 0 or torch.all(disagreement_scores == 0):
+            return torch.randint(0, max(1, disagreement_scores.size(0) - 1), (1,)).item()
+
+        if temperature == 0:
+            return disagreement_scores.argmax().item()
+
+        scores = disagreement_scores / (temperature + 1e-10)
+        probs = F.softmax(scores, dim=-1)
+
+        if torch.isnan(probs).any():
+            probs = torch.where(torch.isnan(probs), torch.zeros_like(probs), probs)
+            probs = probs / probs.sum()
+
+        return min(torch.distributions.Categorical(probs).sample().item(), disagreement_scores.size(0) - 2)
+
+    def _generate_answers_batch(self, questions: List[str], base_answers: List[str], original_answers: List[str]) -> List[str]:
         if self.model is None:
             raise ValueError("Model is not set. Cannot generate dynamic labels.")
+        if self.use_branching_mode and self.reference_model is None:
+            raise ValueError("Reference model is not set. Cannot use branching mode.")
 
         # doesn't support pop, have to do this garbage
         generation_config = OmegaConf.to_container(self.generation_config, resolve=True)
@@ -245,31 +313,75 @@ class TofuDataset(Dataset):
         if self.max_logprob_difference != float('inf'):
             self._compute_and_cache_original_logprobs(questions, original_answers)
 
-        job_queue = deque(enumerate(zip(questions, original_answers)))
+        job_queue = deque(enumerate(zip(questions, base_answers, original_answers)))
         all_answers = [None] * len(questions)
         regeneration_counts = [0] * len(questions)
 
         while job_queue:
-            batch = [job_queue.popleft() for _ in range(min(batch_size, len(job_queue)))]
+            current_batch_size = min(batch_size, len(job_queue))
+            batch = [job_queue.popleft() for _ in range(current_batch_size)]
             batch_indices, batch_data = zip(*batch)
-            batch_questions, batch_original_answers = zip(*batch_data)
+            batch_questions, batch_base_answers, batch_original_answers = zip(*batch_data)
 
-            input_texts = [f"{self.config.question_start_tag}{q}{self.config.question_end_tag}" for q in batch_questions]
-            inputs = self.tokenizer(input_texts, return_tensors="pt", padding=True, truncation=True).to(self.model.device)
+            if self.use_branching_mode:
+                input_texts = [f"{self.config.question_start_tag}{q}{self.config.question_end_tag}{self.config.answer_tag}{a}" for q, a in zip(batch_questions, batch_base_answers)]
+                encoded = self.tokenizer(input_texts, return_tensors="pt", padding=True, truncation=True, max_length=self.max_length).to(self.model.device)
 
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_length=self.max_length,
-                    eos_token_id=self.tokenizer.eos_token_id,
-                    pad_token_id=self.tokenizer.eos_token_id,
-                    **generation_config
-                )
+                answer_starts = []
+                for q in batch_questions:
+                    prefix = f"{self.config.question_start_tag}{q}{self.config.question_end_tag}{self.config.answer_tag}"
+                    answer_starts.append(len(self.tokenizer.encode(prefix, add_special_tokens=True)) - 1)
 
-            batch_answers = [
-                output.split(self.config.question_end_tag)[-1].strip()[len(self.config.answer_tag):]
-                for output in self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            ]
+                disagreements = []
+                branch_positions = []
+                for i, content_start_pos in enumerate(answer_starts):
+                    seq_start = (encoded.attention_mask[i] == 1).nonzero()[0].item()
+                    rel_start_pos = content_start_pos + seq_start
+
+                    scores = self.compute_token_disagreement(encoded.input_ids[i:i+1], encoded.attention_mask[i:i+1], rel_start_pos)
+                    disagreements.append(scores[0])
+
+                    rel_branch_pos = self.sample_branching_point(scores[0], self.branch_temperature) + rel_start_pos + 1
+                    branch_positions.append(rel_branch_pos)
+
+                prefix_ids = []
+                prefix_mask = []
+                for i, branch_pos in enumerate(branch_positions):
+                    seq_start = (encoded.attention_mask[i] == 1).nonzero()[0].item()
+                    seq_prefix = encoded.input_ids[i, seq_start:branch_pos]
+                    mask_prefix = encoded.attention_mask[i, seq_start:branch_pos]
+                    # left pad to old size
+                    prefix_ids.append(F.pad(seq_prefix, (self.max_length - len(seq_prefix), 0), value=self.tokenizer.pad_token_id))
+                    prefix_mask.append(F.pad(mask_prefix, (self.max_length - len(mask_prefix), 0), value=0))
+
+                prefix_ids = torch.stack(prefix_ids)
+                prefix_mask = torch.stack(prefix_mask)
+
+                generation_kwargs = {**generation_config}
+                if self.mask_gt_token:
+                    # Get tokens to prevent for each sequence
+                    bad_tokens = [encoded.input_ids[i, branch_positions[i]].item() for i in range(current_batch_size)]
+                    logits_processor = LogitsProcessorList([PerSequenceBadTokenLogitsProcessor(bad_tokens)])
+                    generation_kwargs["logits_processor"] = logits_processor
+                    generation_kwargs["renormalize_logits"] = True
+                    if generation_kwargs.get("temperature", 1.0) == 0:
+                        del generation_kwargs["temperature"]
+                        generation_kwargs["do_sample"] = False
+
+                outputs = self.model.generate(input_ids=prefix_ids, attention_mask=prefix_mask, pad_token_id=self.tokenizer.pad_token_id, eos_token_id=self.tokenizer.eos_token_id, max_new_tokens=self.max_length, **generation_kwargs)
+
+                batch_answers = []
+                for output in self.tokenizer.batch_decode(outputs, skip_special_tokens=True):
+                    answer = output.split(self.config.answer_tag)[-1].strip()
+                    batch_answers.append(answer)
+            else:
+                input_texts = [f"{self.config.question_start_tag}{q}{self.config.question_end_tag}" for q in batch_questions]
+                inputs = self.tokenizer(input_texts, return_tensors="pt", padding=True, truncation=True).to(self.model.device)
+
+                with torch.no_grad():
+                    outputs = self.model.generate(**inputs, max_length=self.max_length, eos_token_id=self.tokenizer.eos_token_id, pad_token_id=self.tokenizer.eos_token_id, **generation_config)
+
+                batch_answers = [output.split(self.config.question_end_tag)[-1].strip()[len(self.config.answer_tag):] for output in self.tokenizer.batch_decode(outputs, skip_special_tokens=True)]
 
             if self.max_logprob_difference != float('inf'):
                 # Prepare inputs for computing logprobs of generated answers
@@ -325,7 +437,7 @@ class TofuDataset(Dataset):
                     all_answers[idx] = answer
                 else:
                     regeneration_counts[idx] += 1
-                    job_queue.append((idx, (batch_questions[i], original_answer)))
+                    job_queue.append((idx, (batch_questions[i], batch_base_answers[i], original_answer)))
 
         self.tokenizer.padding_side = original_padding_side
         return all_answers
@@ -339,7 +451,15 @@ class TofuDataset(Dataset):
 
         questions = [item[self.config.question_key] for item in self.data]
         original_answers = [item[self.config.answer_key] for item in self.data]
-        generated_answers = self._generate_answers_batch(questions, original_answers)
+
+        # Use previously generated answers if they exist and branch_use_previous is True (for branching)
+        base_answers = (
+            [item[self.config.answer_key] for item in self.dynamic_data]
+            if self.dynamic_data is not None and self.branch_use_previous
+            else original_answers
+        )
+
+        generated_answers = self._generate_answers_batch(questions, base_answers, original_answers)
 
         self.dynamic_data = [
             {**item, self.config.answer_key: new_answer}
@@ -351,6 +471,9 @@ class TofuDataset(Dataset):
         if not self.model:  # Only copy the first time
             self.original_model = copy.deepcopy(model).cpu()
         self.model = model
+
+    def set_reference_model(self, reference_model):
+        self.reference_model = reference_model
 
     @staticmethod
     def collate_fn(batch: List[Dict]) -> Dict[str, torch.Tensor]:
