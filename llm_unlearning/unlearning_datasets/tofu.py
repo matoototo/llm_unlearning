@@ -63,6 +63,7 @@ class TofuDataset(Dataset):
         self.max_regeneration_attempts = config.get("max_regeneration_attempts", 20)
         self.max_length_difference = config.get("max_length_difference", 999999)
         self.max_logprob_difference = config.get("max_logprob_difference", float('inf'))
+        self.use_original_for_logdiff = config.get("use_original_for_logdiff", True)
         self.original_logprobs_cache = {}
 
     def _load_split(self):
@@ -413,7 +414,11 @@ class TofuDataset(Dataset):
                 labels_generated = labels_generated.masked_fill(padding_mask_generated, -100)
 
                 with torch.no_grad():
-                    outputs_generated = self.model(**generated_inputs)
+                    if self.use_original_for_logdiff:
+                        self._load_original_model_to_cuda()
+                        outputs_generated = self.original_model(**generated_inputs)
+                        self._remove_original_model_from_cuda()
+                    else: outputs_generated = self.model(**generated_inputs)
 
                 logprob_generated = probability(outputs_generated.logits, labels_generated, logprobs=True)
 

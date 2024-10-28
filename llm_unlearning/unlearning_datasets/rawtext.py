@@ -39,6 +39,7 @@ class RawTextDataset(Dataset):
         self.max_offset = config.get("max_offset", 999999)
         self.max_rouge_score = config.get("max_rouge_score", 1.0)
         self.max_logprob_difference = config.get("max_logprob_difference", float('inf'))
+        self.use_original_for_logdiff = config.get("use_original_for_logdiff", True)
         self.rouge_scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
         self.max_regeneration_attempts = config.get("max_regeneration_attempts", 20)
         self.original_logprobs_cache = {}
@@ -222,7 +223,11 @@ class RawTextDataset(Dataset):
                     labels_generated[i][:prompt_lengths[i]] = -100
 
                 with torch.no_grad():
-                    outputs_generated = self.model(**generated_encodings)
+                    if self.use_original_for_logdiff:
+                        self._load_original_model_to_cuda()
+                        outputs_generated = self.original_model(**generated_encodings)
+                        self._remove_original_model_from_cuda()
+                    else: outputs_generated = self.model(**generated_encodings)
 
                 logprob_generated = probability(outputs_generated.logits, labels_generated, logprobs=True)
 
