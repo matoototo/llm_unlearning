@@ -78,11 +78,11 @@ class Evaluator:
                 batch = self._process_batch(batch)
                 batch_metric = eval.compute(self.model, batch, self.tokenizer, perturb_probability=perturb_probability)
 
-                if 'metadata' in batch_metric:
-                    per_item_data.extend(batch_metric['metadata'])
-                    del batch_metric['metadata']
-
                 if isinstance(batch_metric, dict):
+                    if 'metadata' in batch_metric:
+                        per_item_data.extend(batch_metric['metadata'])
+                        del batch_metric['metadata']
+
                     for key, value in batch_metric.items():
                         if key not in total_metrics:
                             total_metrics[key] = 0.0

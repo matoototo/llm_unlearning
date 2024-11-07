@@ -158,6 +158,7 @@ class NPO(Method):
     # https://arxiv.org/abs/2404.05868
     def __init__(self, **kwargs):
         self.beta = kwargs.get("beta", 0.1)
+        self.forget_coeff = kwargs.get("forget_coeff", 1.0)
         self.retain_coeff = kwargs.get("retain_coeff", 1.0)
         self.use_sequence_nll = kwargs.get("use_sequence_nll", True)
         super().__init__(**kwargs)
@@ -178,7 +179,7 @@ class NPO(Method):
 
         neg_logloss_ratio = (loss - reference_loss)
         npo_loss = (F.logsigmoid(self.beta * neg_logloss_ratio) * -2 / self.beta).mean()
-        total_loss = npo_loss
+        total_loss = npo_loss * self.forget_coeff
 
         if self.retain_coeff:
             retain_outputs = model(**retain_inputs)
