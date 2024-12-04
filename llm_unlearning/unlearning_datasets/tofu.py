@@ -40,6 +40,7 @@ class TofuDataset(Dataset):
     ):
         super().__init__()
         self.tokenizer = tokenizer
+        self.tokenizer.padding_side = "right"
         self.config = config
         self.max_length = config.max_length
         self.split = config.split
