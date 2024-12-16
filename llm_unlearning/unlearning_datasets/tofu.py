@@ -50,11 +50,16 @@ class TofuDataset(Dataset):
         self.original_model = copy.deepcopy(model).cpu() if model is not None else None
         self.generation_config = config.get("generation_config", {})
         self.use_dynamic_labels = config.get("use_dynamic_labels", False)
+        self.use_substitutions = config.get("use_substitutions", False)
         self.use_branching_mode = config.get("use_branching_mode", False)
         self.branch_use_previous = config.get("branch_use_previous", False)
         self.mask_gt_token = config.get("mask_gt_token", False)
         if self.mask_gt_token and not self.use_branching_mode:
             raise ValueError("mask_gt_token can only be True when use_branching_mode is True")
+        if self.use_substitutions and self.use_branching_mode:
+            raise ValueError("Cannot use both substitutions and branching mode")
+        if self.use_substitutions and not self.use_dynamic_labels:
+            raise ValueError("Substitutions require use_dynamic_labels=True")
         self.branch_temperature = config.get("branch_temperature", 0.0)
         self.regenerate_every = config.get("regenerate_every", 1)
         self.current_epoch = -1
@@ -66,6 +71,8 @@ class TofuDataset(Dataset):
         self.max_logprob_difference = config.get("max_logprob_difference", float('inf'))
         self.use_original_for_logdiff = config.get("use_original_for_logdiff", True)
         self.original_logprobs_cache = {}
+        self.logprob_ratio_threshold = config.get("logprob_ratio_threshold", 2.0)
+        self.use_reference_for_sampling = config.get("use_reference_for_sampling", False)
 
     def _load_split(self):
         part = None
@@ -126,10 +133,18 @@ class TofuDataset(Dataset):
         return self._process_item(self.data[idx])
 
     def _process_item(self, item: Dict) -> Dict[str, torch.Tensor]:
-        question = item[self.config.question_key]
-        answer = item[self.config.answer_key]
-
-        result = self._encode_qa_pair(question, answer)
+        # If this is substitution data, return the tensors directly
+        if self.use_substitutions and all(k in item for k in ['input_ids', 'attention_mask', 'labels', 'question_length']):
+            result = {
+                'input_ids': item['input_ids'],
+                'attention_mask': item['attention_mask'],
+                'labels': item['labels'],
+                'question_length': item['question_length']
+            }
+        else:
+            question = item[self.config.question_key]
+            answer = item[self.config.answer_key]
+            result = self._encode_qa_pair(question, answer)
 
         _result_keys = list(result.keys())
         if hasattr(self.config, 'perturbed_answer_key') and self.config.perturbed_answer_key in item:
@@ -448,29 +463,116 @@ class TofuDataset(Dataset):
         self.tokenizer.padding_side = original_padding_side
         return all_answers
 
+    def _generate_token_substitutions(self, questions, original_answers):
+        generation_kwargs = OmegaConf.to_container(self.generation_config, resolve=True)
+        batch_size = generation_kwargs.pop("batch_size", 8)
+        temperature = generation_kwargs.pop("temperature", 1.0)
+
+        generated_data = []
+        job_queue = deque(enumerate(zip(questions, original_answers)))
+
+        while job_queue:
+            current_batch_size = min(batch_size, len(job_queue))
+            batch = [job_queue.popleft() for _ in range(current_batch_size)]
+            batch_indices, batch_data = zip(*batch)
+            batch_questions, batch_original_answers = zip(*batch_data)
+
+            encoded_pairs = [
+                self._encode_qa_pair(q, a)
+                for q, a in zip(batch_questions, batch_original_answers)
+            ]
+
+            encoded = {
+                'input_ids': torch.stack([p['input_ids'] for p in encoded_pairs]).to(self.model.device),
+                'attention_mask': torch.stack([p['attention_mask'] for p in encoded_pairs]).to(self.model.device),
+                'question_length': torch.stack([p['question_length'] for p in encoded_pairs]).to(self.model.device),
+                'labels': torch.stack([p['labels'] for p in encoded_pairs]).to(self.model.device)
+            }
+
+            with torch.no_grad():
+                encoded_inputs = {k: v for k, v in encoded.items() if k != 'question_length' and k != 'labels'}
+                current_logits = self.model(**encoded_inputs).logits
+                if self.reference_model is not None and (self.use_reference_for_sampling or self.logprob_ratio_threshold > 0):
+                    reference_logits = self.reference_model(**encoded_inputs).logits
+
+            for i in range(current_batch_size):
+                valid_positions = range(encoded['question_length'][i].item() + 2, encoded['input_ids'].size(1))
+                substitute_labels = encoded['labels'][i].clone()  # Start with -100s from original encoding
+
+                for pos in valid_positions:
+                    if encoded['attention_mask'][i, pos] == 0: continue
+
+                    original_token = encoded['input_ids'][i, pos]
+                    current_token_logits = current_logits[i, pos-1]
+
+                    should_substitute = True
+                    if self.reference_model is not None and self.logprob_ratio_threshold > 0:
+                        ref_token_logits = reference_logits[i, pos-1]
+
+                        current_logprob = F.log_softmax(current_token_logits, dim=-1)[original_token]
+                        ref_logprob = F.log_softmax(ref_token_logits, dim=-1)[original_token]
+                        logprob_ratio = (current_logprob - ref_logprob).exp()
+                        should_substitute = logprob_ratio > self.logprob_ratio_threshold
+
+                    if should_substitute:
+                        if self.use_reference_for_sampling and self.reference_model is not None:
+                            sampling_logits = reference_logits[i, pos-1]
+                        else:
+                            sampling_logits = current_token_logits
+
+                        sampling_logits = sampling_logits.clone()
+                        sampling_logits[original_token] = float('-inf')
+                        probs = F.softmax(sampling_logits / temperature, dim=-1)
+                        substitute_labels[pos] = torch.multinomial(probs, 1)
+                    else:
+                        substitute_labels[pos] = -100
+
+                data = {
+                    'input_ids': encoded['input_ids'][i].cpu(),
+                    'attention_mask': encoded['attention_mask'][i].cpu(),
+                    'labels': substitute_labels.cpu(),
+                    'question_length': encoded['question_length'][i].cpu()
+                }
+                generated_data.append((batch_indices[i], data))
+
+        generated_data.sort()
+        return [data for _, data in generated_data]
+
     def set_epoch(self, epoch: float):
         epoch = int(epoch)
-        if self.current_epoch == epoch: return
-        if not self.use_dynamic_labels or (self.dynamic_data is not None and epoch % self.regenerate_every != 0):
+        if self.current_epoch == epoch:
+            return
+        if not (self.use_dynamic_labels or self.use_substitutions) or (self.dynamic_data is not None and epoch % self.regenerate_every != 0):
             self.current_epoch = epoch
             return
 
         questions = [item[self.config.question_key] for item in self.data]
         original_answers = [item[self.config.answer_key] for item in self.data]
 
-        # Use previously generated answers if they exist and branch_use_previous is True (for branching)
-        base_answers = (
-            [item[self.config.answer_key] for item in self.dynamic_data]
-            if self.dynamic_data is not None and self.branch_use_previous
-            else original_answers
-        )
+        if self.use_substitutions:
+            substitution_data = self._generate_token_substitutions(questions, original_answers)
+            self.dynamic_data = [
+                {
+                    **item,
+                    "input_ids": data["input_ids"],
+                    "attention_mask": data["attention_mask"],
+                    "labels": data["labels"],
+                    "question_length": data["question_length"]
+                }
+                for item, data in zip(self.data, substitution_data)
+            ]
+        else:
+            base_answers = (
+                [item[self.config.answer_key] for item in self.dynamic_data]
+                if self.dynamic_data is not None and self.branch_use_previous
+                else original_answers
+            )
+            generated_answers = self._generate_answers_batch(questions, base_answers, original_answers)
+            self.dynamic_data = [
+                {**item, self.config.answer_key: new_answer}
+                for item, new_answer in zip(self.data, generated_answers)
+            ]
 
-        generated_answers = self._generate_answers_batch(questions, base_answers, original_answers)
-
-        self.dynamic_data = [
-            {**item, self.config.answer_key: new_answer}
-            for item, new_answer in zip(self.data, generated_answers)
-        ]
         self.current_epoch = epoch
 
     def set_model(self, model):
@@ -573,6 +675,11 @@ def get_tofu_dataset(
             for dataset in [self.forget_dataset, self.retain_dataset, self.dynamic_dataset, self.retain_validation_dataset]:
                 if dataset and hasattr(dataset, 'set_model') and dataset.use_dynamic_labels:
                     dataset.set_model(model)
+
+        def set_reference_model(self, reference_model):
+            for dataset in [self.forget_dataset, self.retain_dataset, self.dynamic_dataset, self.retain_validation_dataset]:
+                if dataset and hasattr(dataset, 'set_reference_model'):
+                    dataset.set_reference_model(reference_model)
 
         @staticmethod
         def collate_fn(batch: List[Dict]) -> Dict[str, Dict[str, torch.Tensor]]:
