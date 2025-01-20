@@ -1,34 +1,55 @@
-import os
 import torch
+from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer
 from typing import Dict, List
 from omegaconf import DictConfig
-from torch.utils.data import Dataset
+import datasets
 
 from llm_unlearning.unlearning_datasets.rawtext import RawTextDataset
-from llm_unlearning.unlearning_datasets.wikitext import WikiTextDataset
 
-class HPDataset(RawTextDataset):
+class MuseDataset(RawTextDataset):
     def _load_dataset(self):
-        assert "file_path" in self.config and os.path.exists(self.config.file_path), "Config must contain valid file_path to the dataset file, you might need to download it first"
+        subset = self.config.get("subset", "raw")
+        split = self.config.get("split", None)
 
-        with open(self.config.file_path, 'r', encoding='utf-8') as file:
-            text = file.read()
+        if not split:
+            raise ValueError("Split must be specified in config")
 
-        tokens = self.tokenizer.encode(text, add_special_tokens=False)
-        chunks = []
+        download_config = datasets.DownloadConfig(force_download=True)
+        texts = []
 
-        for i in range(0, len(tokens), self.max_length):
-            chunk_tokens = tokens[i:i + self.max_length]
-            chunk_text = self.tokenizer.decode(chunk_tokens)
-            chunks.append({"text": chunk_text})
+        if split == "*" or split == "retrain":
+            dataset = datasets.load_dataset(
+                "muse-bench/MUSE-News",
+                subset,
+                download_config=download_config
+            )
+            available_splits = [x for x in list(dataset.keys()) if x != "holdout"]
+            if split == "retrain": available_splits = [x for x in available_splits if "forget" not in x]
+
+            if not available_splits: raise ValueError(f"No splits found for subset '{subset}'")
+
+            for current_split in available_splits:
+                texts.extend(self._process_split(dataset[current_split], subset))
+        else:
+            dataset = datasets.load_dataset(
+                "muse-bench/MUSE-News",
+                subset,
+                split=split,
+                download_config=download_config
+            )
+            texts.extend(self._process_split(dataset, subset))
 
         if self.num_samples is not None:
-            chunks = chunks[:self.num_samples]
+            texts = texts[:self.num_samples]
 
-        return chunks
+        full_text = " ".join(texts)
+        return self.tokenizer.encode(full_text, add_special_tokens=False)
 
-def get_hp_dataset(
+    def _process_split(self, dataset, subset):
+         return [item["text"] for item in dataset]
+
+def get_muse_dataset(
     tokenizer: PreTrainedTokenizer,
     config: DictConfig
 ) -> Dataset:
@@ -37,10 +58,10 @@ def get_hp_dataset(
     dynamic_config = config.get("dynamic", None)
     retain_validation_config = config.get("retain_validation", None)
 
-    forget_dataset = HPDataset(tokenizer, forget_config, model=None)
-    retain_dataset = WikiTextDataset(tokenizer, retain_config) if retain_config else None
-    dynamic_dataset = HPDataset(tokenizer, dynamic_config, model=None) if dynamic_config else None
-    retain_validation_dataset = HPDataset(tokenizer, retain_validation_config, model=None) if retain_validation_config else None
+    forget_dataset = MuseDataset(tokenizer, forget_config)
+    retain_dataset = MuseDataset(tokenizer, retain_config) if retain_config else None
+    dynamic_dataset = MuseDataset(tokenizer, dynamic_config, model=None) if dynamic_config else None
+    retain_validation_dataset = MuseDataset(tokenizer, retain_validation_config) if retain_validation_config else None
 
     class CombinedDataset(Dataset):
         def __init__(self, forget_dataset, retain_dataset, dynamic_dataset, retain_validation_dataset):
@@ -62,11 +83,6 @@ def get_hp_dataset(
                 retain_idx = torch.randint(0, len(self.retain_dataset), (1,)).item()
                 result["retain_inputs"] = self.retain_dataset[retain_idx]
 
-                # some wikitext rows are empty, here we resample that case
-                while (result["retain_inputs"]['input_ids'] == 50256).all():
-                    retain_idx = torch.randint(0, len(self.retain_dataset), (1,)).item()
-                    result["retain_inputs"] = self.retain_dataset[retain_idx]
-
             if self.retain_validation_dataset:
                 retain_val_idx = torch.randint(0, len(self.retain_validation_dataset), (1,)).item()
                 result["retain_validation_inputs"] = self.retain_validation_dataset[retain_val_idx]
@@ -75,12 +91,12 @@ def get_hp_dataset(
 
         def set_epoch(self, epoch):
             for dataset in [self.forget_dataset, self.retain_dataset, self.dynamic_dataset, self.retain_validation_dataset]:
-                if hasattr(dataset, 'set_epoch'):
+                if dataset and hasattr(dataset, 'set_epoch'):
                     dataset.set_epoch(epoch)
 
         def set_model(self, model):
             for dataset in [self.forget_dataset, self.dynamic_dataset]:
-                if hasattr(dataset, 'set_model') and dataset.use_dynamic_labels:
+                if dataset and hasattr(dataset, 'set_model') and dataset.use_dynamic_labels:
                     dataset.set_model(model)
 
         @staticmethod
@@ -90,10 +106,7 @@ def get_hp_dataset(
                 if key not in batch[0]:
                     continue
                 collected_batch = [item[key] for item in batch]
-                if key == 'retain_inputs':
-                    result[key] = WikiTextDataset.collate_fn(collected_batch)
-                else:
-                    result[key] = HPDataset.collate_fn(collected_batch)
+                result[key] = MuseDataset.collate_fn(collected_batch)
             return result
 
     return CombinedDataset(forget_dataset, retain_dataset, dynamic_dataset, retain_validation_dataset)

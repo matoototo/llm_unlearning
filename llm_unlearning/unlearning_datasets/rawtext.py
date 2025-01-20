@@ -8,7 +8,6 @@ from collections import deque
 
 import os
 import copy
-import warnings
 
 from llm_unlearning.evals.utils import probability
 
@@ -18,7 +17,6 @@ class RawTextDataset(Dataset):
         tokenizer: PreTrainedTokenizer,
         config: DictConfig,
         model: Optional[PreTrainedModel] = None,
-        full_context_mode: bool = False,
         num_samples: Optional[int] = None
     ):
         super().__init__()
@@ -26,8 +24,8 @@ class RawTextDataset(Dataset):
         self.config = config
         self.model = model
         self.original_model = copy.deepcopy(model).cpu() if model is not None else None
-        self.max_length = config.max_length
-        self.full_context_mode = full_context_mode
+        self.seq_length = config.max_length
+        self.stride = config.get("stride", self.seq_length // 2)
         self.num_samples = num_samples
         self.use_dynamic_labels = config.get("use_dynamic_labels", False)
         self.generation_config = config.get("generation_config", {})
@@ -36,7 +34,6 @@ class RawTextDataset(Dataset):
         self.dynamic_data = None
         self.min_prefix_length = config.get("min_prefix_length", 50)
         self.max_prefix_length = config.get("max_prefix_length", 100)
-        self.max_offset = config.get("max_offset", 999999)
         self.max_rouge_score = config.get("max_rouge_score", 1.0)
         self.max_logprob_difference = config.get("max_logprob_difference", float('inf'))
         self.use_original_for_logdiff = config.get("use_original_for_logdiff", True)
@@ -44,10 +41,12 @@ class RawTextDataset(Dataset):
         self.max_regeneration_attempts = config.get("max_regeneration_attempts", 20)
         self.original_logprobs_cache = {}
 
-        if self.max_offset > 0 and self.full_context_mode:
-            warnings.warn("Using offsets and full_context_mode is probably not what you want – it likely won't be full context anymore")
+        # Load and tokenize entire corpus
+        self.tokens = self._load_dataset()
+        self.n_seqs = (len(self.tokens) - self.seq_length) // self.stride
 
-        self.data = self._load_dataset()
+        if self.num_samples is not None:
+            self.n_seqs = min(self.n_seqs, self.num_samples)
 
     def _load_dataset(self):
         if self.config.get("dataset_type") == "text_file":
@@ -63,33 +62,23 @@ class RawTextDataset(Dataset):
         with open(file_path, 'r', encoding='utf-8') as file:
             text = file.read()
 
-        tokens = self.tokenizer.encode(text, add_special_tokens=False)
-        chunks = []
-
-        for i in range(0, len(tokens), self.max_length):
-            chunk_tokens = tokens[i:i + self.max_length]
-            chunk_text = self.tokenizer.decode(chunk_tokens)
-            chunks.append({"text": chunk_text})
-
-        if self.full_context_mode:
-            return self._create_full_context_items(chunks)
-
-        if self.num_samples is not None:
-            chunks = chunks[:self.num_samples]
-
-        return chunks
+        return self.tokenizer.encode(text, add_special_tokens=False)
 
     def __len__(self) -> int:
-        return len(self.data)
+        return self.n_seqs
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         if self.use_dynamic_labels and self.dynamic_data is not None:
             item = self.dynamic_data[idx]
             return self._process_dynamic_item(item)
-        return self._process_multi_text_item(idx)
+        return self._process_sequence_item(idx)
 
-    def _process_multi_text_item(self, idx: int) -> Dict[str, torch.Tensor]:
-        text = self._get_multi_text(idx)
+    def _process_sequence_item(self, idx: int) -> Dict[str, torch.Tensor]:
+        # Get sequence using sliding window
+        start_idx = idx * self.stride
+        end_idx = start_idx + self.seq_length
+        tokens = self.tokens[start_idx:end_idx]
+        text = self.tokenizer.decode(tokens)
         return self._encode_text(text)
 
     def _process_dynamic_item(self, item: Dict) -> Dict[str, torch.Tensor]:
@@ -100,7 +89,7 @@ class RawTextDataset(Dataset):
     def _encode_text(self, text: str, prefix_length: Optional[int] = None) -> Dict[str, torch.Tensor]:
         encoded = self.tokenizer(
             text,
-            max_length=self.max_length,
+            max_length=self.seq_length,
             add_special_tokens=True,
             padding="max_length",
             truncation=True,
@@ -130,30 +119,6 @@ class RawTextDataset(Dataset):
             result['prefix_length'] = torch.tensor(prefix_length)
 
         return result
-
-    def _create_full_context_items(self, dataset):
-        full_context_items = []
-        current_text = ""
-
-        for item in dataset:
-            if self.num_samples is not None and len(full_context_items) >= self.num_samples:
-                break
-            current_text += " " + item['text']
-            encoded = self.tokenizer(current_text, max_length=self.max_length, truncation=True, return_overflowing_tokens=True, return_length=True)
-
-            while encoded.length[0] == self.max_length:
-                full_context_items.append({'text': self.tokenizer.decode(encoded.input_ids[0])})
-                if len(encoded.input_ids) > 1:
-                    current_text = self.tokenizer.decode(encoded.input_ids[1])
-                else:
-                    current_text = ""
-                encoded = self.tokenizer(current_text, max_length=self.max_length, truncation=True, return_overflowing_tokens=True, return_length=True)
-
-        lengths = [self.tokenizer(item['text']).input_ids.__len__() for item in full_context_items]
-        full_context_items = list(map(lambda i : full_context_items[i],
-                                filter(lambda i: lengths[i] == self.max_length, range(len(full_context_items)))))
-
-        return full_context_items
 
     def _generate_texts_batch(self, prompts: List[str], original_texts: List[str]) -> List[str]:
         if self.model is None:
@@ -185,7 +150,7 @@ class RawTextDataset(Dataset):
             with torch.no_grad():
                 outputs = self.model.generate(
                     **inputs,
-                    max_length=self.max_length,
+                    max_length=self.seq_length,
                     eos_token_id=self.tokenizer.eos_token_id,
                     pad_token_id=self.tokenizer.eos_token_id,
                     **generation_config
@@ -204,7 +169,6 @@ class RawTextDataset(Dataset):
                     generated_text = self.remove_prompt_prefix(prompt, generated_text)
 
                 # Compute Rouge score between generated_text and original continuation
-                original_text = batch_original_texts[batch_indices.index(idx)]
                 original_continuation = original_text[len(prompt):]
                 rouge_score_value = self.rouge_scorer.score(original_continuation, generated_text)['rougeL'].fmeasure
                 rouge_score_enough = rouge_score_value <= self.max_rouge_score
@@ -281,7 +245,7 @@ class RawTextDataset(Dataset):
                 prompt_tokenized = self.tokenizer.encode(prompt, add_special_tokens=False)
                 prompt_lengths.append(len(prompt_tokenized))
 
-            original_encodings = self.tokenizer(batch_original_texts, return_tensors="pt", padding=True, truncation=True, max_length=self.max_length).to(self.original_model.device)
+            original_encodings = self.tokenizer(batch_original_texts, return_tensors="pt", padding=True, truncation=True, max_length=self.seq_length).to(self.original_model.device)
             labels_original = original_encodings['input_ids'].clone()
 
             for i in range(len(batch_indices)):
@@ -309,12 +273,14 @@ class RawTextDataset(Dataset):
         original_texts = []
         prefix_lengths = []
 
-        for idx in range(len(self.data)):
-            text = self._get_multi_text(idx)
+        for idx in range(len(self)):
+            # Get sequence using sliding window
+            start_idx = idx * self.stride
+            end_idx = start_idx + self.seq_length
+            tokens = self.tokens[start_idx:end_idx]
+            text = self.tokenizer.decode(tokens)
 
-            tokens = self.tokenizer.encode(text, add_special_tokens=False)
             full_length = len(tokens)
-
             min_prefix = min(self.min_prefix_length, full_length - 1)
             max_prefix = min(self.max_prefix_length, full_length - 1)
 
@@ -324,7 +290,7 @@ class RawTextDataset(Dataset):
                 prefix_length = torch.randint(min_prefix, max_prefix + 1, (1,)).item()
 
             prompt_tokens = tokens[:prefix_length]
-            prompt = self.tokenizer.decode(prompt_tokens, skip_special_tokens=True)
+            prompt = self.tokenizer.decode(prompt_tokens)
             prompts.append(prompt)
             original_texts.append(text)
             prefix_lengths.append(prefix_length)
@@ -336,39 +302,6 @@ class RawTextDataset(Dataset):
             for prompt, generated_text, prefix_length in zip(prompts, generated_texts, prefix_lengths)
         ]
         self.current_epoch = epoch
-
-    def _get_multi_text(self, idx: int) -> str:
-        text = ""
-        current_idx = idx
-        total_length = 0
-
-        initial_text = self.data[current_idx]['text']
-        # the text can sometimes be empty, so we need to skip it
-        while len(initial_text) == 0:
-            current_idx = torch.randint(0, len(self.data), (1,)).item()
-            initial_text = self.data[current_idx]['text']
-
-        offset = torch.randint(0, min(self.max_offset, len(initial_text)), (1,)).item()
-        # snap right to closest space
-        while offset < len(initial_text) and initial_text[offset] != " ":
-            offset += 1
-        offset += 1 # skip space
-        # this will never happen, but just in case
-        if offset >= len(initial_text):
-            offset = 0
-
-        text += initial_text[offset:]
-        total_length = self.tokenizer.encode(text, add_special_tokens=False).__len__()
-
-        while total_length < self.max_length and current_idx < len(self.data) - 1:
-            current_idx += 1
-            next_text = self.data[current_idx]['text']
-            text += next_text
-            total_length = self.tokenizer.encode(text, add_special_tokens=False).__len__()
-
-        # tokens = self.tokenizer.encode(text, add_special_tokens=False)
-        # text = self.tokenizer.decode(tokens[:self.max_length])
-        return text
 
     def set_model(self, model):
         if not self.model:  # only copy first time
